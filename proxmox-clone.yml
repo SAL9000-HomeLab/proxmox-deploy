@@ -1,0 +1,171 @@
+---
+- name: Clone Windows VMs from Proxmox templates with least-loaded placement
+  hosts: local
+  gather_facts: false
+
+  vars_files:
+    - vars/proxmox.yml
+    - vars/vms.yml
+
+  collections:
+    - community.general
+
+  pre_tasks:
+    - name: Validate provided template_name (if passed)
+      assert:
+        that:
+          - template_name is not defined or (template_name in allowed_templates)
+        fail_msg: "template_name is not in allowed_templates"
+
+    - name: Merge defaults into VMs
+      set_fact:
+        vms_expanded: "{{ vms | map('combine', default_vm, recursive=True) | list }}"
+
+    - name: Build auth header for Proxmox API (token)
+      set_fact:
+        pve_auth_header:
+          Authorization: "PVEAPIToken={{ proxmox_api_user }}!{{ proxmox_api_token_id }}={{ proxmox_api_token_secret }}"
+
+    - name: Get cluster node resources (CPU/mem/disk, online status)
+      uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/cluster/resources?type=node"
+        method: GET
+        headers: "{{ pve_auth_header }}"
+        return_content: true
+        validate_certs: "{{ proxmox_validate_certs }}"
+      register: cluster_nodes_raw
+      # Uses official /cluster/resources?type=node for node load & status
+      # (fields include: node, status, cpu (0..1), maxcpu, mem, maxmem, etc.)
+
+    - name: Select online nodes and sort by current CPU usage
+      set_fact:
+        _nodes_sorted: >-
+          {{
+            (cluster_nodes_raw.json.data
+             | selectattr('type','equalto','node')
+             | selectattr('status','equalto','online')
+             {% if (allowed_nodes|length)>0 %}| selectattr('node','in', allowed_nodes){% endif %}
+             | list)
+            | sort(attribute='cpu')
+          }}
+
+    - name: Check storage availability for each candidate node
+      uri:
+        url: "https://{{ proxmox_api_host }}:8006/api2/json/nodes/{{ item.node }}/storage/{{ target_storage }}/status"
+        method: GET
+        headers: "{{ pve_auth_header }}"
+        return_content: true
+        validate_certs: "{{ proxmox_validate_certs }}"
+      loop: "{{ _nodes_sorted }}"
+      loop_control:
+        label: "{{ item.node }}"
+      register: stor_status
+
+    - name: Build eligible node list (storage active preferred)
+      set_fact:
+        eligible_nodes: >-
+          {{
+            (
+              _nodes_sorted
+              | json_query('[*].node')
+              | list
+            )
+            if (stor_status.results | selectattr('json.data.active','defined') | list | length == 0)
+            else
+            (
+              stor_status.results
+              | selectattr('json.data.active','truthy')
+              | map(attribute='item.node')
+              | list
+              | default(_nodes_sorted | map(attribute='node') | list)
+            )
+          }}
+
+  tasks:
+    - name: Create/Update VM from template (idempotent)
+      community.general.proxmox_kvm:
+        api_host: "{{ proxmox_api_host }}"
+        api_user: "{{ proxmox_api_user }}"
+        api_token_id: "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        validate_certs: "{{ proxmox_validate_certs }}"
+
+        # Auto-placement: use VM's node if set; else pick least-loaded (round-robin across eligible_nodes)
+        node: >-
+          {% if item.node is defined and item.node %}
+            {{ item.node }}
+          {% else %}
+            {{ eligible_nodes[(idx) % (eligible_nodes | length)] }}
+          {% endif %}
+        pool: "{{ item.pool | default(omit) }}"
+        state: present
+        name: "{{ item.name }}"
+        vmid: "{{ item.vmid | default(omit) }}"
+
+        # Clone settings
+        clone: "{{ item.template }}"
+        full: true
+        storage: "{{ item.target_storage }}"
+        format: "qcow2"
+
+        # CPU / Memory
+        sockets: "{{ item.sockets | default(1) }}"
+        cores: "{{ item.cores | default(2) }}"
+        memory: "{{ item.memory | default(4096) }}"
+
+        # Windows guest tuning
+        ostype: "{{ item.ostype | default('win10') }}"
+        scsihw: "{{ item.scsihw | default('virtio-scsi-single') }}"
+        kvm: "{{ item.kvm | default(true) }}"
+        agent: "{{ item.agent | default(1) }}"
+
+        # Cloud-init (config-drive) values
+        ciuser: "{{ item.ciuser | default('ansible-local') }}"
+        cipassword: "{{ item.cipassword | default(omit) }}"
+        sshkeys: "{{ item.ssh_keys | default(omit) }}"  # typically unused on Windows but harmless
+        nameserver: "{{ item.nameserver | default(omit) }}"
+
+        # Network (virtio NIC on a bridge with optional VLAN)
+        net0: >-
+          virtio,bridge={{ item.bridge | default('vmbr0') }}
+          {% if item.vlan is defined and item.vlan %},tag={{ item.vlan }}{% endif %}
+          {% if item.macaddr is defined %},macaddr={{ item.macaddr }}{% endif %}
+
+        # IP via Cloud-Init (static or DHCP)
+        ipconfig0: >-
+          {% if item.ip is defined and item.ip %}
+          ip={{ item.ip }}{% if item.gw is defined and item.gw %},gw={{ item.gw }}{% endif %}
+          {% else %}
+          ip=dhcp
+          {% endif %}
+
+        onboot: "{{ item.onboot | default(true) }}"
+        tags: "{{ item.tags | default(omit) }}"
+        started: "{{ item.start_after_clone | default(true) }}"
+      loop: "{{ vms_expanded }}"
+      loop_control:
+        label: "{{ item.name }}"
+        index_var: idx
+
+    - name: Compute host to wait for (strip CIDR)
+      set_fact:
+        _wait_hosts: "{{ vms_expanded
+                        | map(attribute='ip')
+                        | list
+                        | map('regex_replace','/\\d+$','')
+                        | list }}"
+    - name: Wait for guest service (WinRM 5986 by default)
+      when:
+        - vms_expanded[idx].wait_for_guest | default(true)
+        - (_wait_hosts[idx] | length) > 0
+      wait_for:
+        host: "{{ _wait_hosts[idx] }}"
+        port: "{{ vms_expanded[idx].wait_for_port | default(5986) }}"
+        delay: 10
+        timeout: 900
+        state: started
+      loop: "{{ range(0, vms_expanded | length) | list }}"
+      loop_control:
+        index_var: idx
+        label: "{{ vms_expanded[idx].name }}"
+        

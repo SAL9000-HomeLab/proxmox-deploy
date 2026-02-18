@@ -1,0 +1,50 @@
+# Proxmox API & TLS
+proxmox_api_host: "pve.example.com"         # Any PVE node or the cluster VIP
+proxmox_api_user: "root@pam"
+proxmox_api_token_id: "ansible"
+proxmox_api_token_secret: "REPLACE_ME"
+proxmox_validate_certs: false               # true if you use valid TLS certs
+
+# Scheduling / placement
+# Optionally restrict placement to specific nodes (leave empty to allow all)
+allowed_nodes: []                           # e.g. ["pve01","pve02","pve03"]
+
+# Storage to check for "active" status on each node
+target_storage: "nfs_ssd"
+
+# Templates you allow at runtime
+allowed_templates:
+  - "W25StdCore"
+  - "W25StdGUI"
+  - "W22StdCore"
+  - "W22StdGUI"
+  - "W19StdCore"
+  - "W19StdGUI"   # adjust if needed
+
+# Cluster-wide defaults for VMs (overridable per VM)
+default_vm:
+  pool: "Test"
+  template: "{{ template_name | default(omit) }}"
+  target_storage: "{{ target_storage }}"
+  # CPU/RAM defaults
+  sockets: 1
+  cores: 2
+  memory: 4096
+  # Windows guest best practices
+  ostype: "win10"
+  scsihw: "virtio-scsi-single"   # controller model
+  agent: 1
+  onboot: true
+  kvm: true
+  # Network defaults
+  bridge: "vmbr0"
+  vlan: null
+  # Cloud-init values passed via config drive
+  ciuser: "ansible-local"
+  nameserver: "10.100.30.101 10.100.30.111"
+  # Start & wait behavior
+  start_after_clone: true
+  wait_for_guest: true
+  wait_for_port: 5986            # HTTPS WinRM by default for Windows
+  # Tags
+  tags: "win"
