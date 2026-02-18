@@ -1,6 +1,6 @@
 # Proxmox API & TLS
-proxmox_api_host: "pve.example.com"         # Any PVE node or the cluster VIP
-proxmox_api_user: "root@pam"
+proxmox_api_host: "pve01.lab.sal9000.tech"         # Any PVE node or the cluster VIP
+proxmox_api_user: "ansible-local@pam"
 proxmox_api_token_id: "ansible"
 proxmox_api_token_secret: "REPLACE_ME"
 proxmox_validate_certs: false               # true if you use valid TLS certs
@@ -19,7 +19,7 @@ allowed_templates:
   - "W22StdCore"
   - "W22StdGUI"
   - "W19StdCore"
-  - "W19StdGUI"   # adjust if needed
+  - "W19StdGUI"
 
 # Cluster-wide defaults for VMs (overridable per VM)
 default_vm:

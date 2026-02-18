@@ -6,6 +6,7 @@
   vars_files:
     - vars/proxmox.yml
     - vars/vms.yml
+    - "{{ lookup('env', 'ANSIBLE_PROXMOX_SECRET_FILE') }}"
 
   collections:
     - community.general
@@ -168,4 +169,3 @@
       loop_control:
         index_var: idx
         label: "{{ vms_expanded[idx].name }}"
-        
