@@ -1,8 +1,7 @@
 # Proxmox API & TLS
 proxmox_api_host: "pve01.lab.sal9000.tech"         # Any PVE node or the cluster VIP
 proxmox_api_user: "ansible-local@pam"
-proxmox_api_token_id: "ansible"
-proxmox_api_token_secret: "REPLACE_ME"
+proxmox_api_token_id: "ansible-local@pam!ci-runner"
 proxmox_validate_certs: false               # true if you use valid TLS certs
 
 # Scheduling / placement
@@ -31,7 +30,7 @@ default_vm:
   cores: 2
   memory: 4096
   # Windows guest best practices
-  ostype: "win10"
+  ostype: "win11"
   scsihw: "virtio-scsi-single"   # controller model
   agent: 1
   onboot: true
@@ -47,4 +46,4 @@ default_vm:
   wait_for_guest: true
   wait_for_port: 5986            # HTTPS WinRM by default for Windows
   # Tags
-  tags: "win"
+  tags: "windows"
