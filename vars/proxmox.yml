@@ -1,7 +1,7 @@
 # Proxmox API & TLS
 proxmox_api_host: "pve01.lab.sal9000.tech"         # Any PVE node or the cluster VIP
 proxmox_api_user: "ansible-local@pam"
-proxmox_api_token_id: "ansible-local@pam!ci-runner"
+proxmox_api_token_id: "ci-runner"
 proxmox_validate_certs: false               # true if you use valid TLS certs
 
 # Scheduling / placement
@@ -19,6 +19,14 @@ allowed_templates:
   - "W22StdGUI"
   - "W19StdCore"
   - "W19StdGUI"
+
+template_map:
+  W25StdCore: 9001
+  W25StdGUI:  9002
+  W22StdCore: 9003
+  W22StdGUI:  9004
+  W19StdCore: 9005
+  W19StdGUI:  9006
 
 # Cluster-wide defaults for VMs (overridable per VM)
 default_vm:
@@ -40,7 +48,7 @@ default_vm:
   vlan: null
   # Cloud-init values passed via config drive
   ciuser: "ansible-local"
-  nameserver: "10.100.30.101 10.100.30.111"
+  nameservers: "10.100.30.101 10.100.30.111"
   # Start & wait behavior
   start_after_clone: true
   wait_for_guest: true

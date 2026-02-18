@@ -1,0 +1,8 @@
+# # Map *keys* you use in vars/vms.yml to the actual template VMIDs in Proxmox
+# template_map:
+#   W25StdCore: 9001
+#   W25StdGUI:  9002
+#   W22StdCore: 9003
+#   W22StdGUI:  9004
+#   W19StdCore: 9005
+#   W19StdGUI:  9006
