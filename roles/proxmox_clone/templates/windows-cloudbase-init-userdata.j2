@@ -1,0 +1,39 @@
+#cloud-config
+hostname: {{ vm_item.hostname | default(vm_item.name) }}
+
+timezone: UTC
+
+# Administrator password
+password: "{{ windows_admin_password }}"
+chpasswd:
+  expire: false
+
+# Enable WinRM
+winrm:
+  enable: true
+
+# Network configuration (Cloudbase-Init supports cloud-config style)
+{% if vm_item.ip is defined %}
+network:
+  version: 1
+  config:
+    - type: physical
+      name: Ethernet
+      subnets:
+        - type: static
+          address: {{ vm_item.ip }}
+          gateway: {{ vm_item.gateway }}
+          dns_nameservers:
+            - {{ vm_item.dns | default('1.1.1.1') }}
+{% endif %}
+
+write_files:
+  - path: C:\cloudbase-init\bootstrap.ps1
+    content: |
+      Write-Output "Cloudbase-Init provisioning started"
+      Enable-PSRemoting -Force
+      Set-NetFirewallRule -DisplayGroup "Windows Remote Management" -Enabled True
+      Write-Output "Provisioning complete"
+
+runcmd:
+  - powershell.exe -ExecutionPolicy Bypass -File C:\cloudbase-init\bootstrap.ps1

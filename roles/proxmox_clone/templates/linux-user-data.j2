@@ -1,0 +1,41 @@
+#cloud-config
+hostname: {{ vm_item.hostname | default(vm_item.name) }}
+fqdn: {{ vm_item.hostname | default(vm_item.name) }}
+manage_etc_hosts: true
+
+timezone: UTC
+
+ssh_pwauth: false
+
+{% if vm_item.ssh_authorized_keys is defined %}
+ssh_authorized_keys:
+{% for key in vm_item.ssh_authorized_keys %}
+  - {{ key }}
+{% endfor %}
+{% endif %}
+
+users:
+  - name: root
+    lock_passwd: false
+    shell: /bin/bash
+    {% if vm_item.ssh_authorized_keys is defined %}
+    ssh_authorized_keys:
+    {% for key in vm_item.ssh_authorized_keys %}
+      - {{ key }}
+    {% endfor %}
+    {% endif %}
+
+package_update: true
+packages:
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+
+{% if vm_item.dns is defined %}
+write_files:
+  - path: /etc/resolv.conf
+    content: |
+      nameserver {{ vm_item.dns }}
+{% endif %}

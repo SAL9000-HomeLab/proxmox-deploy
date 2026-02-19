@@ -1,0 +1,39 @@
+# group_vars/proxmox.yml
+
+# Proxmox connection & sane defaults (vault the token/secret)
+proxmox:
+  # Default node — used if per-VM node is not set. Must match your inventory host name.
+  node: pve01.lab.sal9000.tech
+  storage: nfs_ssd                   # storage name where clones should be created
+  net_bridge: vmbr0
+  timeout: 300
+
+# VM provisioning list (your existing content)
+provision_vms:
+  - name: W25C-TEST001
+    template_vmid: 9001
+    node: pve01.lab.sal9000.tech
+    # vmid: 3001
+    disk_target: scsi0
+    os_type: windows
+    hostname: W25C-TEST001.lab.sal9000.tech
+    ip: 10.100.30.201/24
+    gateway: 10.100.30.1
+    dns: 10.100.30.101 10.100.30.111
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+
+  - name: W25G-TEST001
+    template_vmid: 9002
+    node: pve01.lab.sal9000.tech
+    # vmid: 3002
+    disk_target: scsi0
+    os_type: windows
+    hostname: W25G-TEST001.lab.sal9000.tech
+    ip: 10.100.30.202/24
+    gateway: 10.100.30.1
+    dns: 10.100.30.101 10.100.30.111
+    cores: 4
+    memory: 8192
+    disk_size: 80G

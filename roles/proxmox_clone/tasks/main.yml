@@ -1,0 +1,23 @@
+---
+# roles/proxmox_clone/tasks/main.yml
+
+- name: Set defaults from role defaults
+  set_fact:
+    proxmox: "{{ proxmox | default(proxmox_defaults) }}"
+  vars:
+    proxmox_defaults: "{{ lookup('vars','proxmox_defaults') | default({}) }}"
+  run_once: true
+
+- name: Ensure provision_vms present
+  assert:
+    that:
+      - provision_vms is defined
+      - provision_vms | length > 0
+    fail_msg: "No provision_vms defined. Put VM entries in group_vars/proxmox.yml"
+
+# Loop the per-VM tasks; vm_item is the loop var
+- name: Provision VMs from list (include per-VM task file)
+  include_tasks: provision_vm.yml
+  loop: "{{ provision_vms }}"
+  loop_control:
+    loop_var: vm_item

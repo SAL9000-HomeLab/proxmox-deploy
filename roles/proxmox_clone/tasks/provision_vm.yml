@@ -1,0 +1,488 @@
+---
+# roles/proxmox_clone/tasks/provision_vm.yml
+# Cleaned per-VM provisioning tasks (SSH/qm-based, delegated to node)
+# Expects vm_item loop variable.
+
+- name: Prepare safe defaults (avoid undefined attribute access)
+  set_fact:
+    proxmox_cb: "{{ proxmox if (proxmox is defined) else {} }}"
+    proxmox_defaults_cb: "{{ proxmox_defaults if (proxmox_defaults is defined) else {} }}"
+    proxmox_behavior_cb: "{{ proxmox_clone_behavior if (proxmox_clone_behavior is defined) else {} }}"
+  run_once: false
+
+- name: Prepare VM variables (robust defaults, uses .get())
+  set_fact:
+    desired_vmid: >-
+      {{ vm_item.vmid if (vm_item.vmid is defined and vm_item.vmid) else (next_vmid | default(0)) }}
+    cloud_type: "{{ vm_item.os_type | default('linux') }}"
+    node_name: >-
+      {{ vm_item.node
+         | default( proxmox_cb.get('node') | default(proxmox_defaults_cb.get('node','pve01')) ) }}
+    storage_name: >-
+      {{ vm_item.storage
+         | default( proxmox_cb.get('storage') | default(proxmox_defaults_cb.get('storage','local')) ) }}
+    vm_name: "{{ vm_item.name }}"
+    disk_target: >-
+      {{ vm_item.disk_target
+         | default(
+           proxmox_behavior_cb.get('disk_target')
+           | default( proxmox_cb.get('disk_target') | default(proxmox_defaults_cb.get('disk_target','scsi0')) )
+         )
+      }}
+    use_full_clone: >-
+      {{ vm_item.full
+         | default(
+           proxmox_behavior_cb.get('full_clone')
+           | default( proxmox_cb.get('full_clone') | default(proxmox_defaults_cb.get('full_clone', true)) )
+         )
+      | bool }}
+  run_once: false
+
+- name: Run qm list on node to discover existing VMs
+  ansible.builtin.command:
+    cmd: qm list
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_list_full
+  changed_when: false
+
+- name: Determine if target vmid exists on node
+  set_fact:
+    target_exists: "{{ (qm_list_full.stdout_lines | select('match', '^\\s*' + (desired_vmid | string) + '\\s') | list) | length > 0 }}"
+  run_once: false
+
+- name: Determine if template vmid exists on node
+  set_fact:
+    template_exists: "{{ (qm_list_full.stdout_lines | select('match', '^\\s*' + (vm_item.template_vmid | string) + '\\s') | list) | length > 0 }}"
+  run_once: false
+
+- name: Fail if template not present on node
+  fail:
+    msg: "Template vmid {{ vm_item.template_vmid }} not found on node {{ node_name }}. qm list: {{ qm_list_full.stdout_lines | join('\\n') }}"
+  when: not template_exists
+  delegate_to: "{{ node_name }}"
+  become: true
+
+# --- Ensure we have a valid desired_vmid (auto-allocate if vm_item.vmid not set) ---
+- name: Lookup next available VMID on node (if needed)
+  ansible.builtin.command:
+    cmd: qm nextid
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_nextid_raw
+  failed_when: false
+  changed_when: false
+  when: desired_vmid | default(0) | int == 0
+
+- name: Set next_vmid from qm nextid output (or fallback)
+  set_fact:
+    next_vmid: >-
+      {{ (qm_nextid_raw.stdout | default('') | regex_search('\\d+', '\\0') | default('')) | int
+         if (qm_nextid_raw is defined and (qm_nextid_raw.stdout | default('') | length) > 0)
+         else (next_vmid | default(100) | int) }}
+  when: desired_vmid | default(0) | int == 0
+  run_once: false
+
+- name: Use auto-allocated next_vmid if desired_vmid was empty/zero
+  set_fact:
+    desired_vmid: "{{ next_vmid | int }}"
+  when: desired_vmid | default(0) | int == 0
+  run_once: false
+
+- name: Assert desired_vmid is valid
+  assert:
+    that:
+      - desired_vmid is defined
+      - (desired_vmid | int) > 0
+    fail_msg: "desired_vmid is missing or invalid ({{ desired_vmid }}). qm nextid output: {{ qm_nextid_raw.stdout | default('') }}"
+
+- name: Clone template into new VMID (when not exists) using qm (full vs linked)
+  block:
+    - name: Clone (full clone path)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+          --full
+          --storage {{ storage_name }}
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: qm_clone_full
+      changed_when: qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower) or 'created' in (qm_clone_full.stdout | lower))
+      failed_when: qm_clone_full.rc != 0 and ('already exists' not in (qm_clone_full.stderr | default('')) )
+      when:
+        - not target_exists
+        - use_full_clone | bool
+
+    - name: Clone (linked clone path — no --storage)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: qm_clone_linked
+      changed_when: qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower) or 'created' in (qm_clone_linked.stdout | lower))
+      failed_when: qm_clone_linked.rc != 0 and ('already exists' not in (qm_clone_linked.stderr | default('')) )
+      when:
+        - not target_exists
+        - not (use_full_clone | bool)
+
+  when: not target_exists
+
+- name: Gather VM config after ensure (qm config)
+  ansible.builtin.command:
+    cmd: qm config {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_config
+  failed_when: false
+  changed_when: false
+
+# --- disk size parsing -------------------------------------------------------
+
+- name: Parse current bootdisk raw/fallback lists from qm config (safe)
+  set_fact:
+    current_disk_size_raw_list: >-
+      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*size=([^,\\n\\s]+)') }}
+    current_disk_size_fallback_list: >-
+      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*,([^,\\n\\s]*G)') }}
+  vars:
+    disk_target: "{{ disk_target }}"
+  run_once: false
+
+- name: Pick first parsed disk size raw & fallback into simple vars
+  set_fact:
+    current_disk_size_raw: "{{ (current_disk_size_raw_list | first) | default('') }}"
+    current_disk_size_fallback: "{{ (current_disk_size_fallback_list | first) | default('') }}"
+  run_once: false
+
+- name: Compute final current_disk_size (prefer raw then fallback)
+  set_fact:
+    current_disk_size: >-
+      {{ current_disk_size_raw if (current_disk_size_raw is defined and (current_disk_size_raw | length) > 0)
+         else (current_disk_size_fallback | default('')) }}
+  run_once: false
+
+- name: Compute desired_disk_gib and current_disk_gib (numeric GiB)
+  set_fact:
+    desired_disk_gib: >-
+      {{ (vm_item.disk_size | default('0'))
+         | regex_replace('(?i)g$','')
+         | regex_replace('[^0-9\\.]+','')
+         | float | default(0) }}
+    current_disk_gib: >-
+      {{ (current_disk_size | default('0'))
+         | regex_replace('(?i)g$','')
+         | regex_replace('[^0-9\\.]+','')
+         | float | default(0) }}
+  when: vm_item.disk_size is defined
+  run_once: false
+
+- name: Decide whether resize is needed (compare numeric GiB)
+  set_fact:
+    should_resize: "{{ (desired_disk_gib | float) > (current_disk_gib | float) }}"
+  when: vm_item.disk_size is defined
+  run_once: false
+
+# --- robust resize block -----------------------------------------------------
+
+# Replace the old Resolve disk_target_resolved + Debug resize inputs tasks with this block
+
+- name: Discover candidate disk keys from qm config
+  set_fact:
+    _qm_disk_keys: >-
+      {{ (qm_config.stdout | default(''))
+         | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
+  run_once: false
+
+- name: Resolve disk_target_resolved (vm_item -> explicit disk_target -> parse qm_config -> default scsi0)
+  set_fact:
+    disk_target_resolved: >-
+      {{
+        (vm_item.disk_target | default(''))
+        | default( (disk_target | default('')) )
+        | default( (_qm_disk_keys | first) | default('scsi0') )
+      }}
+  run_once: false
+
+- name: Debug resize inputs (show resolved disk target)
+  debug:
+    msg:
+      vmid: "{{ desired_vmid }}"
+      vm_item_disk_target: "{{ vm_item.disk_target | default('UNSET') }}"
+      disk_target_from_vars: "{{ disk_target | default('UNSET') }}"
+      parsed_disk_keys: "{{ _qm_disk_keys }}"
+      disk_target_resolved: "{{ disk_target_resolved }}"
+      vm_item_disk_size: "{{ vm_item.disk_size | default('UNSET') }}"
+      target_exists: "{{ target_exists | default('undef') }}"
+  run_once: false
+
+- name: Debug resize inputs
+  debug:
+    msg:
+      vmid: "{{ desired_vmid }}"
+      disk_target_resolved: "{{ disk_target_resolved }}"
+      vm_item_disk_size: "{{ vm_item.disk_size | default('UNSET') }}"
+      target_exists: "{{ target_exists | default('undef') }}"
+  run_once: false
+
+- name: Ensure disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
+  set_fact:
+    _qm_disk_keys: >-
+      {{ (qm_config.stdout | default('')) | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
+    disk_target_resolved: >-
+      {{
+        (vm_item.disk_target | default(''))
+        | default( disk_target | default(proxmox_defaults.disk_target | default('')) )
+        | default( (_qm_disk_keys | first) | default('scsi0') )
+      }}
+  run_once: false
+
+- name: Try qm disk resize (preferred syntax)
+  ansible.builtin.command:
+    cmd: >-
+      qm disk resize {{ desired_vmid }} {{ disk_target_resolved }} {{ vm_item.disk_size }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_resize_try1
+  failed_when: false
+  when:
+    - not target_exists
+    - vm_item.disk_size is defined
+    - should_resize | default(true)
+
+- name: Compute qm_resize_ok (robustly handle rc or results[])
+  set_fact:
+    qm_resize_ok: >-
+      {{
+        (qm_resize_try1 is defined) and (
+          (qm_resize_try1.rc is defined and qm_resize_try1.rc == 0)
+          or
+          (qm_resize_try1.results is defined and (qm_resize_try1.results|length) > 0
+            and qm_resize_try1.results[0].rc is defined and qm_resize_try1.results[0].rc == 0)
+        )
+      }}
+  when: qm_resize_try1 is defined
+  run_once: false
+
+- name: Compute qm_resize2_ok (robustly handle rc or results[])
+  set_fact:
+    qm_resize2_ok: >-
+      {{
+        (qm_resize_try2 is defined) and (
+          (qm_resize_try2.rc is defined and qm_resize_try2.rc == 0)
+          or
+          (qm_resize_try2.results is defined and (qm_resize_try2.results|length) > 0
+            and qm_resize_try2.results[0].rc is defined and qm_resize_try2.results[0].rc == 0)
+        )
+      }}
+  when: qm_resize_try2 is defined
+  run_once: false
+
+- name: Determine final resize status and fail if both attempts failed (safe checks)
+  fail:
+    msg: |
+      Both resize attempts failed for VM {{ desired_vmid }} disk {{ disk_target_resolved }} -> {{ vm_item.disk_size }}.
+      try1 rc={{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined) else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and qm_resize_try1.results|length > 0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
+      try1 stdout={{ (qm_resize_try1.stdout | default('')) }}
+      try1 stderr={{ (qm_resize_try1.stderr | default('')) }}
+
+      try2 rc={{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined) else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and qm_resize_try2.results|length > 0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
+      try2 stdout={{ (qm_resize_try2.stdout | default('')) }}
+      try2 stderr={{ (qm_resize_try2.stderr | default('')) }}
+  when:
+    - not target_exists
+    - vm_item.disk_size is defined
+    - ( (qm_resize_ok is not defined or qm_resize_ok == false) and (qm_resize2_ok is not defined or qm_resize2_ok == false) )
+
+
+- name: Try legacy qm resize if first attempt failed with argument errors
+  ansible.builtin.command:
+    cmd: >-
+      qm resize {{ desired_vmid }} {{ disk_target_resolved }} {{ vm_item.disk_size }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_resize_try2
+  failed_when: false
+  when:
+    - not target_exists
+    - vm_item.disk_size is defined
+    - should_resize | default(true)
+    - qm_resize_ok is defined and qm_resize_ok == false
+
+- name: Determine final resize status and fail if both attempts failed (safe checks)
+  fail:
+    msg: |
+      Both resize attempts failed for VM {{ desired_vmid }} disk {{ disk_target_resolved | default('NONE') }} -> {{ vm_item.disk_size }}.
+      try1 rc={{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined) else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and (qm_resize_try1.results|length) > 0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
+      try1 stdout={{ (qm_resize_try1.stdout | default('')) }}
+      try1 stderr={{ (qm_resize_try1.stderr | default('')) }}
+
+      try2 rc={{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined) else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and (qm_resize_try2.results|length) > 0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
+      try2 stdout={{ (qm_resize_try2.stdout | default('')) }}
+      try2 stderr={{ (qm_resize_try2.stderr | default('')) }}
+  when:
+    - not target_exists
+    - vm_item.disk_size is defined
+    - ( (qm_resize_ok is not defined or qm_resize_ok == false) and (qm_resize2_ok is not defined or qm_resize2_ok == false) )
+
+
+- name: Mark resize changed if any attempt succeeded (safe)
+  set_fact:
+    qm_resize_changed: true
+  when:
+    - (qm_resize_ok | default(false)) or (qm_resize2_ok | default(false))
+
+- name: Debug resize attempt outcomes (optional)
+  debug:
+    msg:
+      qm_resize_ok: "{{ qm_resize_ok | default('undef') }}"
+      qm_resize2_ok: "{{ qm_resize2_ok | default('undef') }}"
+      qm_resize_try1_rc: >-
+        {{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined)
+            else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and (qm_resize_try1.results|length)>0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
+      qm_resize_try2_rc: >-
+        {{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined)
+            else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and (qm_resize_try2.results|length)>0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
+  when: vm_item.disk_size is defined
+  run_once: false
+
+
+# --- userdata / snippet ------------------------------------------------------
+
+- name: Render userdata locally (cloudbase for windows, cloud-init for linux)
+  ansible.builtin.template:
+    src: "{{ 'windows-cloudbase-init-userdata.j2' if cloud_type == 'windows' else 'linux-user-data.j2' }}"
+    dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
+  delegate_to: localhost
+  register: userdata_render
+
+- name: Resolve raw snippets dir from variables (safe)
+  set_fact:
+    _proxmox_snippets_raw: >-
+      {{ (
+           (proxmox.snippets_dir if (proxmox is defined and proxmox is mapping and 'snippets_dir' in proxmox) else
+            (proxmox_defaults.snippets_dir if (proxmox_defaults is defined and proxmox_defaults is mapping and 'snippets_dir' in proxmox_defaults) else
+             '/var/lib/vz/snippets'
+            )
+           )
+         ) }}
+  run_once: false
+
+- name: Normalize snippets_dir_resolved (force leading slash, collapse doubles)
+  set_fact:
+    snippets_dir_resolved: >-
+      {{ ('/' ~ (_proxmox_snippets_raw | default('var/lib/vz/snippets'))) | regex_replace('/+','/') }}
+  run_once: false
+
+- name: Debug resolved snippets_dir
+  debug:
+    msg:
+      proxmox_raw: "{{ _proxmox_snippets_raw | default('undef') }}"
+      snippets_dir_resolved: "{{ snippets_dir_resolved | default('undef') }}"
+  run_once: false
+
+- name: Ensure snippets directory exists on node (create if missing)
+  ansible.builtin.file:
+    path: "{{ snippets_dir_resolved }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  delegate_to: "{{ node_name }}"
+  become: true
+
+- name: Copy userdata/snippet to node snippets dir (using resolved dir)
+  ansible.builtin.copy:
+    src: "{{ userdata_render.dest }}"
+    dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ('cloudbase-' if cloud_type == 'windows' else 'user-data-') ~ (desired_vmid | string) }}"
+    owner: root
+    mode: '0600'
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: userdata_render is defined and userdata_render.dest is defined
+
+# --- cicustom / ipconfig -----------------------------------------------------
+
+- name: Decide whether to update cicustom/ipconfig for VM
+  set_fact:
+    current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
+    current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*', '\\0') ) | default('') }}"
+  when: qm_config.stdout is defined
+
+- name: Build desired cicustom and ipconfig strings
+  set_fact:
+    desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
+    desired_ipconfig: >-
+      {% if cloud_type == 'linux' and vm_item.ip is defined %}
+      ip={{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
+      {% else %}
+      ""
+      {% endif %}
+
+- name: QM set - update cicustom/ipconfig only if different
+  ansible.builtin.command:
+    cmd: >-
+      qm set {{ desired_vmid }}
+      --cicustom {{ desired_cicustom }}
+      {% if cloud_type == 'linux' and vm_item.ip is defined %}
+      --ipconfig0 {{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
+      {% endif %}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_result
+  changed_when: qm_set_result.rc == 0 and ('updated' in (qm_set_result.stdout | lower) or 'set' in (qm_set_result.stdout | lower))
+  when: >
+    (current_cicustom != desired_cicustom) or
+    (cloud_type == 'linux' and (current_ipconfig | default('') != desired_ipconfig))
+  failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )
+
+# --- start & wait -----------------------------------------------------------
+
+- name: Start the VM (when newly cloned)
+  ansible.builtin.command:
+    cmd: qm start {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_start
+  changed_when: "'status' in (qm_start.stdout | default('')) or qm_start.rc == 0"
+  when: not target_exists
+
+- name: Wait for guest to accept connections (linux => SSH, windows => WinRM)
+  block:
+    - name: Wait for TCP port for guest (linux:22 windows:5985/5986)
+      ansible.builtin.wait_for:
+        host: "{{ vm_item.ip | regex_replace('/\\d+$','') }}"
+        port: "{{ 5986 if vm_item.winrm_ssl | default(False) else (5985 if cloud_type == 'windows' else 22) }}"
+        timeout: "{{ proxmox_clone_wait.service_timeout | default(600) }}"
+        state: started
+        delay: 10
+        sleep: "{{ proxmox_clone_wait.poll_interval | default(5) }}"
+      delegate_to: localhost
+      register: wait_for_port
+
+    - name: Attempt verification command after service is reachable
+      block:
+        - name: Check Linux with a simple SSH command (if linux)
+          ansible.builtin.command: echo ok
+          when: cloud_type == 'linux'
+          register: linux_ping_result
+          failed_when: false
+          delegate_to: localhost
+          changed_when: false
+
+        - name: Check Windows using winrm (win_ping) - requires pywinrm & connection
+          ansible.builtin.debug:
+            msg: "WinRM reachable on {{ vm_item.ip | regex_replace('/\\d+$','') }} (win_ping should be executed by a follow-up Windows play with connection: winrm)"
+          when: cloud_type == 'windows'
+      rescue:
+        - name: Warn that service check failed
+          ansible.builtin.debug:
+            msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ desired_vmid }})."
+  when: vm_item.ip is defined
+
+- name: Bump next_vmid if we autocalculated
+  set_fact:
+    next_vmid: "{{ next_vmid | int + 1 }}"
+  when: vm_item.vmid is not defined or (vm_item.vmid | int) == 0

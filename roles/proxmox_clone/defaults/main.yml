@@ -1,0 +1,43 @@
+---
+# roles/proxmox_clone/defaults/main.yml
+
+# High-level defaults used by the role (non-sensitive)
+proxmox_defaults:
+  node: pve01.lab.sal9000.tech
+  storage: nfs_ssd
+  snippets_dir: /var/lib/vz/snippets
+  disk_target: scsi0
+  full_clone: true
+  net_bridge: vmbr0
+  timeout: 300
+
+# General proxmox group defaults (used as a secondary lookup)
+# Keep only non-sensitive values here; secrets belong in vaulted files.
+proxmox:
+  node: "{{ proxmox_defaults.node }}"
+  storage: "{{ proxmox_defaults.storage }}"
+  pool: "test"
+  cores: 2          # prefer "cores" to match per-VM field name
+  memory: 2048
+  scsihw: "virtio-scsi-pci"
+  bootdisk: scsi0
+  net_bridge: "{{ proxmox_defaults.net_bridge }}"
+
+# Default vm list (empty) - real VM definitions should be placed in group_vars or host_vars
+provision_vms: []
+
+# Example (commented) for maintainers:
+# - name: web-01
+#   template_vmid: 9000
+#   vmid: null
+#   node: pve01.lab.sal9000.tech
+#   os_type: linux
+#   cores: 2
+#   memory: 2048
+#   disk_size: 20G
+#   ip: 192.168.100.101/24
+#   gateway: 192.168.100.1
+#   dns: 1.1.1.1
+#   ssh_authorized_keys:
+#     - "ssh-rsa AAAA... user@example"
+#   cloudinit_userdata: {}  # optional additions to the jinja template context

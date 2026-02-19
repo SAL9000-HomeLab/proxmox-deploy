@@ -1,0 +1,19 @@
+---
+- name: Debug node_qemu_raw (status/headers/body)
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - "{{ lookup('env','HOME') }}/ansible-secrets/proxmox/proxmox_creds.yml"
+
+  tasks:
+    - name: Debug node_qemu_raw (status/headers/body)
+      debug:
+        msg:
+          status: "{{ node_qemu_raw.status | default('MISSING') }}"
+          url: "{{ node_qemu_raw.url | default('MISSING') }}"
+          elapsed: "{{ node_qemu_raw.elapsed | default('MISSING') }}"
+          content_length: "{{ node_qemu_raw.content | length if node_qemu_raw.content is defined else '0' }}"
+          headers: "{{ node_qemu_raw.headers | default({}) }}"
+          body_preview: "{{ (node_qemu_raw.content | default(''))[:800] }}"
+      delegate_to: localhost
+      changed_when: false
