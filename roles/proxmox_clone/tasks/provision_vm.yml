@@ -139,6 +139,27 @@
   failed_when: false
   changed_when: false
 
+- name: Configure network device (bridge + VLAN)
+  ansible.builtin.command:
+    cmd: >-
+      qm set {{ desired_vmid }}
+      --net0 {{ vm_item.net_model | default('virtio') }},
+      bridge={{ vm_item.net_bridge | default(proxmox_defaults.net_bridge | default('vmbr0')) }}
+      {% if vm_item.vlan is defined %}
+      ,tag={{ vm_item.vlan }}
+      {% endif %}
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: vm_item.net_bridge is defined or vm_item.vlan is defined
+
+- name: Set Proxmox VM tags (if defined)
+  ansible.builtin.command:
+    cmd: qm set {{ desired_vmid }} --tags {{ vm_item.tags }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: vm_item.tags is defined
+
+
 # --- disk size parsing -------------------------------------------------------
 
 - name: Parse current bootdisk raw/fallback lists from qm config (safe)

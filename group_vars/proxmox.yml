@@ -23,17 +23,18 @@ provision_vms:
     cores: 4
     memory: 8192
     disk_size: 60G
+    tags: [ "windows", "2025", "core", "ansible-test" ]
 
-  - name: W25G-TEST001
-    template_vmid: 9002
-    node: pve01.lab.sal9000.tech
-    # vmid: 3002
-    disk_target: scsi0
-    os_type: windows
-    hostname: W25G-TEST001.lab.sal9000.tech
-    ip: 10.100.30.202/24
-    gateway: 10.100.30.1
-    dns: 10.100.30.101 10.100.30.111
-    cores: 4
-    memory: 8192
-    disk_size: 80G
+  # - name: W25G-TEST001
+  #   template_vmid: 9002
+  #   node: pve01.lab.sal9000.tech
+  #   # vmid: 3002
+  #   disk_target: scsi0
+  #   os_type: windows
+  #   hostname: W25G-TEST001.lab.sal9000.tech
+  #   ip: 10.100.30.202/24
+  #   gateway: 10.100.30.1
+  #   dns: 10.100.30.101 10.100.30.111
+  #   cores: 4
+  #   memory: 8192
+  #   disk_size: 80G
