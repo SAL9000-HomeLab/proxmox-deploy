@@ -1,0 +1,8 @@
+---
+- name: Deploy Windows VMs from templates (SSH/qm flow)
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - "{{ lookup('env','HOME') }}/ansible-secrets/proxmox/proxmox_creds.yml"  # optional vault with secrets
+  roles:
+    - proxmox_clone
