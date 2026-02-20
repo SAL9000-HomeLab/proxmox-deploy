@@ -1,0 +1,11 @@
+# vm_config:
+#   name: win02
+#   template_vmid: 9002
+#   vmid: 3002
+#   hostname: win02.example.local
+
+#   ip: 192.168.100.202/24
+#   gateway: 192.168.100.1
+#   dns: 1.1.1.1
+
+#   windows_admin_password: "P@ssword02!"

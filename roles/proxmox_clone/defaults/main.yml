@@ -4,7 +4,6 @@
 # High-level defaults used by the role (non-sensitive)
 proxmox_defaults:
   node: pve01.lab.sal9000.tech
-  pool: "test"
   storage: nfs_ssd
   snippets_dir: /var/lib/vz/snippets
   disk_target: scsi0
@@ -13,6 +12,8 @@ proxmox_defaults:
   net_model: virtio
   vlan: 30
   timeout: 300
+  pool: ""
+  ha_default_group ""
 
 
 # General proxmox group defaults (used as a secondary lookup)

@@ -13,7 +13,7 @@ provision_vms:
   - name: W25C-TEST001
     template_vmid: 9001
     node: pve01.lab.sal9000.tech
-    # vmid: 3001
+    vmid: 3001
     disk_target: scsi0
     os_type: windows
     hostname: W25C-TEST001.lab.sal9000.tech
@@ -23,7 +23,17 @@ provision_vms:
     cores: 4
     memory: 8192
     disk_size: 60G
-    tags: [ "windows", "2025", "core", "ansible-test" ]
+    tags: "windows,2025,core,ansible-test"
+    # optional: proxmox pool (string) - will run `qm set <vmid> --pool <pool>`
+    pool: "test"
+    # optional: HA group name to assign this VM to (string)
+    ha_group: "web-tier-ha"
+    # optional: custom HA options for the resource (dictionary)
+    # Supported keys: max_restart, max_relocate, disable, comment (will be translated to pvesh args)
+    # Example below sets max_restart and max_relocate
+    ha_opts:
+      max_restart: 3
+      max_relocate: 5
 
   # - name: W25G-TEST001
   #   template_vmid: 9002

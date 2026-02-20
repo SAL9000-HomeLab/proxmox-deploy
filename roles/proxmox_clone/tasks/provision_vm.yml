@@ -159,6 +159,134 @@
   become: true
   when: vm_item.tags is defined
 
+# --- Optional: Apply Proxmox pool assignment (idempotent) ---
+- name: Read current vm config to determine pool (if pool supported)
+  ansible.builtin.command:
+    cmd: qm config {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_config_for_pool
+  failed_when: false
+  changed_when: false
+  when: vm_item.pool is defined or (proxmox_defaults.pool is defined and proxmox_defaults.pool | length > 0)
+
+- name: Determine desired_pool (vm -> proxmox_defaults -> none)
+  set_fact:
+    desired_pool: >-
+      {{ vm_item.pool
+         | default(proxmox_defaults.pool | default(''))
+      }}
+  run_once: false
+  when: vm_item.pool is defined or (proxmox_defaults.pool is defined and proxmox_defaults.pool | length > 0)
+
+- name: Parse current pool from qm config
+  set_fact:
+    current_pool: "{{ (qm_config_for_pool.stdout | regex_search('^\\s*pool:\\s*(\\S+)', '\\1') ) | default('') }}"
+  when: qm_config_for_pool is defined and qm_config_for_pool.stdout is defined
+
+- name: QM set - set pool if different
+  ansible.builtin.command:
+    cmd: qm set {{ desired_vmid }} --pool {{ desired_pool }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_pool
+  changed_when: qm_set_pool.rc == 0 and ('updated' in (qm_set_pool.stdout | lower) or 'set' in (qm_set_pool.stdout | lower) or qm_set_pool.stdout | length > 0)
+  failed_when: qm_set_pool.rc != 0 and ('already configured' not in (qm_set_pool.stderr | default('')) )
+  when:
+    - desired_pool is defined
+    - desired_pool | length > 0
+    - current_pool is not defined or (current_pool | default('') ) != (desired_pool | string)
+
+# --- Optional: HA group management (idempotent) ---
+# Only run HA steps when vm_item.ha_group is defined or proxmox_defaults.ha_default_group is set
+
+- name: Determine effective_ha_group (vm or default)
+  set_fact:
+    effective_ha_group: "{{ vm_item.ha_group | default(proxmox_defaults.ha_default_group | default('')) }}"
+  run_once: false
+  when: vm_item.ha_group is defined or (proxmox_defaults.ha_default_group is defined and proxmox_defaults.ha_default_group | length > 0)
+
+- name: Skip HA tasks if no group configured
+  debug:
+    msg: "No HA group configured for {{ vm_name }} (skipping HA steps)."
+  when: effective_ha_group | default('') == ''
+  run_once: false
+
+- name: Check if HA group exists (pvesh)
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/ha/groups
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: pvesh_ha_groups
+  failed_when: false
+  changed_when: false
+  when: effective_ha_group | default('') != ''
+
+- name: Create HA group if missing
+  ansible.builtin.command:
+    cmd: >-
+      pvesh create /cluster/ha/groups -group {{ effective_ha_group }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: pvesh_create_ha_group
+  failed_when: pvesh_create_ha_group.rc != 0 and ('already exists' not in (pvesh_create_ha_group.stderr | default('')) )
+  changed_when: pvesh_create_ha_group.rc == 0
+  when:
+    - effective_ha_group | default('') != ''
+    - (pvesh_ha_groups.stdout | default('') ) is defined
+    - (pvesh_ha_groups.stdout | regex_search('"group":"' ~ (effective_ha_group | quote) ~ '"|\\b' ~ (effective_ha_group | quote) ~ '\\b') ) is not defined
+
+- name: Query existing HA resources to see if VM is present
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/ha/resources
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: pvesh_ha_resources
+  failed_when: false
+  changed_when: false
+  when: effective_ha_group | default('') != ''
+
+- name: Determine if this VM is already an HA resource
+  set_fact:
+    vm_is_ha_resource: >-
+      {{
+        (pvesh_ha_resources.stdout | default(''))
+        | regex_search('\"sid\"\\s*:\\s*\"vm:' ~ (desired_vmid | string) ~ '\"')
+        is not none
+      }}
+  when: pvesh_ha_resources is defined
+
+- name: Build ha resource creation args
+  set_fact:
+    ha_create_args: >-
+      {{ (
+         [ '-sid', 'vm:' ~ (desired_vmid | string),
+           '-group', (effective_ha_group | string) ]
+         + ( ( (vm_item.ha_opts | default({})) | dict2items )
+             | map('join','=')
+             | list
+           )
+        ) }}
+  when: effective_ha_group | default('') != ''
+
+# Note: pvesh create /cluster/ha/resources supports options like:
+#  -sid vm:100 -group mygroup -max_restart 3 -max_relocate 2 etc.
+# We create a flat argument list to be safe.
+
+- name: Create HA resource for VM if missing
+  ansible.builtin.command:
+    cmd: >-
+      pvesh create /cluster/ha/resources {{ ('-sid vm:' ~ (desired_vmid | string)) }} -group {{ effective_ha_group }}
+      {{ ('-max_restart ' ~ (vm_item.ha_opts.max_restart | default('') ) ) if (vm_item.ha_opts is defined and vm_item.ha_opts.max_restart is defined) else '' }}
+      {{ ('-max_relocate ' ~ (vm_item.ha_opts.max_relocate | default('') ) ) if (vm_item.ha_opts is defined and vm_item.ha_opts.max_relocate is defined) else '' }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: pvesh_create_ha_resource
+  failed_when: pvesh_create_ha_resource.rc != 0 and ('already exists' not in (pvesh_create_ha_resource.stderr | default('')) )
+  changed_when: pvesh_create_ha_resource.rc == 0
+  when:
+    - effective_ha_group | default('') != ''
+    - vm_is_ha_resource is not defined or vm_is_ha_resource == false
 
 # --- disk size parsing -------------------------------------------------------
 
