@@ -1,39 +1,59 @@
 #cloud-config
-hostname: {{ vm_item.hostname | default(vm_item.name) }}
+# Cloudbase-Init user-data for Windows
+# Rendered for: {{ vm_name }} (vmid {{ desired_vmid }})
 
-timezone: UTC
+{% set _hostname = (vm_item.hostname if vm_item.hostname is defined and vm_item.hostname else (vm_name | default('winvm'))) %}
+set_hostname: "{{ _hostname }}"
 
-# Administrator password
-password: "{{ windows_admin_password }}"
-chpasswd:
-  expire: false
-
-# Enable WinRM
-winrm:
-  enable: true
-
-# Network configuration (Cloudbase-Init supports cloud-config style)
-{% if vm_item.ip is defined %}
-network:
-  version: 1
-  config:
-    - type: physical
-      name: Ethernet
-      subnets:
-        - type: static
-          address: {{ vm_item.ip }}
-          gateway: {{ vm_item.gateway }}
-          dns_nameservers:
-            - {{ vm_item.dns | default('1.1.1.1') }}
+{% if vm_item.timezone is defined and vm_item.timezone %}
+set_timezone: "{{ vm_item.timezone }}"
 {% endif %}
 
+{# Optional local groups to create / populate #}
+{% if vm_item.local_groups is defined and vm_item.local_groups %}
+groups:
+{% for gname, members in vm_item.local_groups.items() -%}
+  - {{ gname }}: [{% for m in members %}{{ m }}{% if not loop.last %}, {% endif %}{% endfor %}]
+{% endfor %}
+{% endif %}
+
+# Local Administrator (or custom admin) setup
+# users:
+#   - name: "{{ vm_item.admin_user | default('Admin') }}"
+#     {% if vm_item.admin_groups is defined and vm_item.admin_groups %}
+#     groups: [{% for g in vm_item.admin_groups %}{{ g }}{% if not loop.last %}, {% endif %}{% endfor %}]
+#     {% else %}
+#     groups: Administrators
+#     {% endif %}
+#     inactive: false
+#     {% if vm_item.admin_password is defined and vm_item.admin_password %}
+#     passwd: "{{ vm_item.admin_password }}"
+#     {% endif %}
+#     {% if vm_item.admin_expiredate is defined and vm_item.admin_expiredate %}
+#     expiredate: "{{ vm_item.admin_expiredate }}"
+#     {% endif %}
+#     {% if vm_item.ssh_authorized_keys is defined and vm_item.ssh_authorized_keys %}
+#     ssh_authorized_keys:
+#       {% for key in vm_item.ssh_authorized_keys %}
+#       - "{{ key }}"
+#       {% endfor %}
+#     {% endif %}
+
+# {% if vm_item.ntp_servers is defined and vm_item.ntp_servers %}
+# ntp:
+#   enabled: true
+#   servers: {{ vm_item.ntp_servers }}
+# {% endif %}
+
+# Drop a small marker file
 write_files:
-  - path: C:\cloudbase-init\bootstrap.ps1
+  - path: "C:\\ProgramData\\cloudbase-init\\firstboot\\README.txt"
+    permissions: "0644"
     content: |
-      Write-Output "Cloudbase-Init provisioning started"
-      Enable-PSRemoting -Force
-      Set-NetFirewallRule -DisplayGroup "Windows Remote Management" -Enabled True
-      Write-Output "Provisioning complete"
+      Configured by Cloudbase-Init user-data.
+      Hostname: {{ _hostname }}
+
+# No WinRM here — handled by Unattend.xml during Sysprep.
 
 runcmd:
-  - powershell.exe -ExecutionPolicy Bypass -File C:\cloudbase-init\bootstrap.ps1
+  - powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-ExecutionPolicy Bypass -Scope LocalMachine -Force"

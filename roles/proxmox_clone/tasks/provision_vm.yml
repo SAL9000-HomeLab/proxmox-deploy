@@ -2,6 +2,7 @@
 # roles/proxmox_clone/tasks/provision_vm.yml
 # Cleaned per-VM provisioning tasks (SSH/qm-based, delegated to node)
 # Expects vm_item loop variable.
+# NOTE: removed pool and HA-related tasks entirely per request.
 
 - name: Prepare safe defaults (avoid undefined attribute access)
   set_fact:
@@ -159,135 +160,6 @@
   become: true
   when: vm_item.tags is defined
 
-# --- Optional: Apply Proxmox pool assignment (idempotent) ---
-- name: Read current vm config to determine pool (if pool supported)
-  ansible.builtin.command:
-    cmd: qm config {{ desired_vmid }}
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: qm_config_for_pool
-  failed_when: false
-  changed_when: false
-  when: vm_item.pool is defined or (proxmox_defaults.pool is defined and proxmox_defaults.pool | length > 0)
-
-- name: Determine desired_pool (vm -> proxmox_defaults -> none)
-  set_fact:
-    desired_pool: >-
-      {{ vm_item.pool
-         | default(proxmox_defaults.pool | default(''))
-      }}
-  run_once: false
-  when: vm_item.pool is defined or (proxmox_defaults.pool is defined and proxmox_defaults.pool | length > 0)
-
-- name: Parse current pool from qm config
-  set_fact:
-    current_pool: "{{ (qm_config_for_pool.stdout | regex_search('^\\s*pool:\\s*(\\S+)', '\\1') ) | default('') }}"
-  when: qm_config_for_pool is defined and qm_config_for_pool.stdout is defined
-
-- name: QM set - set pool if different
-  ansible.builtin.command:
-    cmd: qm set {{ desired_vmid }} --pool {{ desired_pool }}
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: qm_set_pool
-  changed_when: qm_set_pool.rc == 0 and ('updated' in (qm_set_pool.stdout | lower) or 'set' in (qm_set_pool.stdout | lower) or qm_set_pool.stdout | length > 0)
-  failed_when: qm_set_pool.rc != 0 and ('already configured' not in (qm_set_pool.stderr | default('')) )
-  when:
-    - desired_pool is defined
-    - desired_pool | length > 0
-    - current_pool is not defined or (current_pool | default('') ) != (desired_pool | string)
-
-# --- Optional: HA group management (idempotent) ---
-# Only run HA steps when vm_item.ha_group is defined or proxmox_defaults.ha_default_group is set
-
-- name: Determine effective_ha_group (vm or default)
-  set_fact:
-    effective_ha_group: "{{ vm_item.ha_group | default(proxmox_defaults.ha_default_group | default('')) }}"
-  run_once: false
-  when: vm_item.ha_group is defined or (proxmox_defaults.ha_default_group is defined and proxmox_defaults.ha_default_group | length > 0)
-
-- name: Skip HA tasks if no group configured
-  debug:
-    msg: "No HA group configured for {{ vm_name }} (skipping HA steps)."
-  when: effective_ha_group | default('') == ''
-  run_once: false
-
-- name: Check if HA group exists (pvesh)
-  ansible.builtin.command:
-    cmd: pvesh get /cluster/ha/groups
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: pvesh_ha_groups
-  failed_when: false
-  changed_when: false
-  when: effective_ha_group | default('') != ''
-
-- name: Create HA group if missing
-  ansible.builtin.command:
-    cmd: >-
-      pvesh create /cluster/ha/groups -group {{ effective_ha_group }}
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: pvesh_create_ha_group
-  failed_when: pvesh_create_ha_group.rc != 0 and ('already exists' not in (pvesh_create_ha_group.stderr | default('')) )
-  changed_when: pvesh_create_ha_group.rc == 0
-  when:
-    - effective_ha_group | default('') != ''
-    - (pvesh_ha_groups.stdout | default('') ) is defined
-    - (pvesh_ha_groups.stdout | regex_search('"group":"' ~ (effective_ha_group | quote) ~ '"|\\b' ~ (effective_ha_group | quote) ~ '\\b') ) is not defined
-
-- name: Query existing HA resources to see if VM is present
-  ansible.builtin.command:
-    cmd: pvesh get /cluster/ha/resources
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: pvesh_ha_resources
-  failed_when: false
-  changed_when: false
-  when: effective_ha_group | default('') != ''
-
-- name: Determine if this VM is already an HA resource
-  set_fact:
-    vm_is_ha_resource: >-
-      {{
-        (pvesh_ha_resources.stdout | default(''))
-        | regex_search('\"sid\"\\s*:\\s*\"vm:' ~ (desired_vmid | string) ~ '\"')
-        is not none
-      }}
-  when: pvesh_ha_resources is defined
-
-- name: Build ha resource creation args
-  set_fact:
-    ha_create_args: >-
-      {{ (
-         [ '-sid', 'vm:' ~ (desired_vmid | string),
-           '-group', (effective_ha_group | string) ]
-         + ( ( (vm_item.ha_opts | default({})) | dict2items )
-             | map('join','=')
-             | list
-           )
-        ) }}
-  when: effective_ha_group | default('') != ''
-
-# Note: pvesh create /cluster/ha/resources supports options like:
-#  -sid vm:100 -group mygroup -max_restart 3 -max_relocate 2 etc.
-# We create a flat argument list to be safe.
-
-- name: Create HA resource for VM if missing
-  ansible.builtin.command:
-    cmd: >-
-      pvesh create /cluster/ha/resources {{ ('-sid vm:' ~ (desired_vmid | string)) }} -group {{ effective_ha_group }}
-      {{ ('-max_restart ' ~ (vm_item.ha_opts.max_restart | default('') ) ) if (vm_item.ha_opts is defined and vm_item.ha_opts.max_restart is defined) else '' }}
-      {{ ('-max_relocate ' ~ (vm_item.ha_opts.max_relocate | default('') ) ) if (vm_item.ha_opts is defined and vm_item.ha_opts.max_relocate is defined) else '' }}
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: pvesh_create_ha_resource
-  failed_when: pvesh_create_ha_resource.rc != 0 and ('already exists' not in (pvesh_create_ha_resource.stderr | default('')) )
-  changed_when: pvesh_create_ha_resource.rc == 0
-  when:
-    - effective_ha_group | default('') != ''
-    - vm_is_ha_resource is not defined or vm_is_ha_resource == false
-
 # --- disk size parsing -------------------------------------------------------
 
 - name: Parse current bootdisk raw/fallback lists from qm config (safe)
@@ -336,8 +208,6 @@
 
 # --- robust resize block -----------------------------------------------------
 
-# Replace the old Resolve disk_target_resolved + Debug resize inputs tasks with this block
-
 - name: Discover candidate disk keys from qm config
   set_fact:
     _qm_disk_keys: >-
@@ -362,15 +232,6 @@
       vm_item_disk_target: "{{ vm_item.disk_target | default('UNSET') }}"
       disk_target_from_vars: "{{ disk_target | default('UNSET') }}"
       parsed_disk_keys: "{{ _qm_disk_keys }}"
-      disk_target_resolved: "{{ disk_target_resolved }}"
-      vm_item_disk_size: "{{ vm_item.disk_size | default('UNSET') }}"
-      target_exists: "{{ target_exists | default('undef') }}"
-  run_once: false
-
-- name: Debug resize inputs
-  debug:
-    msg:
-      vmid: "{{ desired_vmid }}"
       disk_target_resolved: "{{ disk_target_resolved }}"
       vm_item_disk_size: "{{ vm_item.disk_size | default('UNSET') }}"
       target_exists: "{{ target_exists | default('undef') }}"
@@ -404,47 +265,17 @@
 - name: Compute qm_resize_ok (robustly handle rc or results[])
   set_fact:
     qm_resize_ok: >-
-      {{
-        (qm_resize_try1 is defined) and (
-          (qm_resize_try1.rc is defined and qm_resize_try1.rc == 0)
-          or
-          (qm_resize_try1.results is defined and (qm_resize_try1.results|length) > 0
-            and qm_resize_try1.results[0].rc is defined and qm_resize_try1.results[0].rc == 0)
-        )
+      {{ (qm_resize_try1 is defined) and (
+           (qm_resize_try1.rc is defined and (qm_resize_try1.rc | int) == 0)
+           or
+           (qm_resize_try1.results is defined
+             and (qm_resize_try1.results | length) > 0
+             and (qm_resize_try1.results[0].rc is defined)
+             and (qm_resize_try1.results[0].rc | int) == 0)
+         )
       }}
   when: qm_resize_try1 is defined
   run_once: false
-
-- name: Compute qm_resize2_ok (robustly handle rc or results[])
-  set_fact:
-    qm_resize2_ok: >-
-      {{
-        (qm_resize_try2 is defined) and (
-          (qm_resize_try2.rc is defined and qm_resize_try2.rc == 0)
-          or
-          (qm_resize_try2.results is defined and (qm_resize_try2.results|length) > 0
-            and qm_resize_try2.results[0].rc is defined and qm_resize_try2.results[0].rc == 0)
-        )
-      }}
-  when: qm_resize_try2 is defined
-  run_once: false
-
-- name: Determine final resize status and fail if both attempts failed (safe checks)
-  fail:
-    msg: |
-      Both resize attempts failed for VM {{ desired_vmid }} disk {{ disk_target_resolved }} -> {{ vm_item.disk_size }}.
-      try1 rc={{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined) else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and qm_resize_try1.results|length > 0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
-      try1 stdout={{ (qm_resize_try1.stdout | default('')) }}
-      try1 stderr={{ (qm_resize_try1.stderr | default('')) }}
-
-      try2 rc={{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined) else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and qm_resize_try2.results|length > 0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
-      try2 stdout={{ (qm_resize_try2.stdout | default('')) }}
-      try2 stderr={{ (qm_resize_try2.stderr | default('')) }}
-  when:
-    - not target_exists
-    - vm_item.disk_size is defined
-    - ( (qm_resize_ok is not defined or qm_resize_ok == false) and (qm_resize2_ok is not defined or qm_resize2_ok == false) )
-
 
 - name: Try legacy qm resize if first attempt failed with argument errors
   ansible.builtin.command:
@@ -459,6 +290,21 @@
     - vm_item.disk_size is defined
     - should_resize | default(true)
     - qm_resize_ok is defined and qm_resize_ok == false
+
+- name: Compute qm_resize2_ok (robustly handle rc or results[])
+  set_fact:
+    qm_resize2_ok: >-
+      {{ (qm_resize_try2 is defined) and (
+           (qm_resize_try2.rc is defined and (qm_resize_try2.rc | int) == 0)
+           or
+           (qm_resize_try2.results is defined
+             and (qm_resize_try2.results | length) > 0
+             and (qm_resize_try2.results[0].rc is defined)
+             and (qm_resize_try2.results[0].rc | int) == 0)
+         )
+      }}
+  when: qm_resize_try2 is defined
+  run_once: false
 
 - name: Determine final resize status and fail if both attempts failed (safe checks)
   fail:
@@ -475,7 +321,6 @@
     - not target_exists
     - vm_item.disk_size is defined
     - ( (qm_resize_ok is not defined or qm_resize_ok == false) and (qm_resize2_ok is not defined or qm_resize2_ok == false) )
-
 
 - name: Mark resize changed if any attempt succeeded (safe)
   set_fact:
@@ -496,7 +341,6 @@
             else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and (qm_resize_try2.results|length)>0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
   when: vm_item.disk_size is defined
   run_once: false
-
 
 # --- userdata / snippet ------------------------------------------------------
 
@@ -545,47 +389,137 @@
 - name: Copy userdata/snippet to node snippets dir (using resolved dir)
   ansible.builtin.copy:
     src: "{{ userdata_render.dest }}"
-    dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ('cloudbase-' if cloud_type == 'windows' else 'user-data-') ~ (desired_vmid | string) }}"
+    dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ( 'cloudbase-' if cloud_type == 'windows' else 'user-data-' ) ~ (desired_vmid | string) }}"
     owner: root
     mode: '0600'
   delegate_to: "{{ node_name }}"
   become: true
   when: userdata_render is defined and userdata_render.dest is defined
 
+# # --- cicustom / ipconfig -----------------------------------------------------
+
+# - name: Decide whether to update cicustom/ipconfig for VM
+#   set_fact:
+#     current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
+#     current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*', '\\0') ) | default('') }}"
+#   when: qm_config.stdout is defined
+
+# - name: Build desired cicustom and ipconfig strings
+#   set_fact:
+#     desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
+#     desired_ipconfig: >-
+#       {% if cloud_type == 'linux' and vm_item.ip is defined %}
+#       ip={{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
+#       {% else %}
+#       ""
+#       {% endif %}
+
+# - name: QM set - update cicustom/ipconfig only if different
+#   ansible.builtin.command:
+#     cmd: >-
+#       qm set {{ desired_vmid }}
+#       --cicustom {{ desired_cicustom }}
+#       {% if cloud_type == 'linux' and vm_item.ip is defined %}
+#       --ipconfig0 {{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
+#       {% endif %}
+#   delegate_to: "{{ node_name }}"
+#   become: true
+#   register: qm_set_result
+#   changed_when: qm_set_result.rc == 0 and ('updated' in (qm_set_result.stdout | lower) or 'set' in (qm_set_result.stdout | lower))
+#   when: >
+#     (current_cicustom != desired_cicustom) or
+#     (cloud_type == 'linux' and (current_ipconfig | default('') != desired_ipconfig))
+#   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )
+
 # --- cicustom / ipconfig -----------------------------------------------------
 
-- name: Decide whether to update cicustom/ipconfig for VM
+- name: Decide whether to update cicustom/ipconfig/DNS for VM
   set_fact:
     current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
     current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*', '\\0') ) | default('') }}"
+    current_nameserver: "{{ (qm_config.stdout | regex_search('nameserver:.*', '\\0') ) | default('') }}"
+    current_searchdomain: "{{ (qm_config.stdout | regex_search('searchdomain:.*', '\\0') ) | default('') }}"
   when: qm_config.stdout is defined
 
-- name: Build desired cicustom and ipconfig strings
+- name: Build desired cicustom and ip/DNS strings (works for Linux & Windows)
   set_fact:
     desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
     desired_ipconfig: >-
-      {% if cloud_type == 'linux' and vm_item.ip is defined %}
-      ip={{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
+      {% if vm_item.ip is defined and vm_item.ip %}
+      ip={{ vm_item.ip }}{% if vm_item.gateway is defined and vm_item.gateway %},gw={{ vm_item.gateway }}{% endif %}
       {% else %}
       ""
       {% endif %}
+    desired_nameserver: >-
+      {% if vm_item.dns_servers is defined and vm_item.dns_servers %}
+      {{ (vm_item.dns_servers | join(' ')) }}
+      {% else %}""{% endif %}
+    desired_searchdomain: >-
+      {% if vm_item.search_domains is defined and vm_item.search_domains %}
+      {{ (vm_item.search_domains | join(' ')) }}
+      {% else %}""{% endif %}
 
-- name: QM set - update cicustom/ipconfig only if different
+- name: Build qm set argv (only include flags that have values)
+  set_fact:
+    qm_set_argv: >-
+      {{
+        [
+          'qm', 'set', (desired_vmid | string),
+          '--cicustom', desired_cicustom
+        ]
+        +
+        (
+          ['--ipconfig0',
+           'ip=' ~ vm_item.ip ~ (
+             (vm_item.gateway is defined and vm_item.gateway) and (',gw=' ~ vm_item.gateway) or ''
+           )
+          ] if (vm_item.ip is defined and vm_item.ip) else []
+        )
+        +
+        (
+          ['--nameserver', (vm_item.dns_servers | join(' '))]
+          if (vm_item.dns_servers is defined and (vm_item.dns_servers | length) > 0) else []
+        )
+        +
+        (
+          ['--searchdomain', (vm_item.search_domains | join(' '))]
+          if (vm_item.search_domains is defined and (vm_item.search_domains | length) > 0) else []
+        )
+      }}
+
+- name: QM set - update cicustom/ipconfig/DNS only if different
   ansible.builtin.command:
-    cmd: >-
-      qm set {{ desired_vmid }}
-      --cicustom {{ desired_cicustom }}
-      {% if cloud_type == 'linux' and vm_item.ip is defined %}
-      --ipconfig0 {{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
-      {% endif %}
+    argv: "{{ qm_set_argv }}"
   delegate_to: "{{ node_name }}"
   become: true
   register: qm_set_result
-  changed_when: qm_set_result.rc == 0 and ('updated' in (qm_set_result.stdout | lower) or 'set' in (qm_set_result.stdout | lower))
+  changed_when: >
+    qm_set_result.rc == 0 and (
+      'updated' in (qm_set_result.stdout | default('') | lower)
+      or 'set' in (qm_set_result.stdout | default('') | lower)
+    )
   when: >
-    (current_cicustom != desired_cicustom) or
-    (cloud_type == 'linux' and (current_ipconfig | default('') != desired_ipconfig))
+    (current_cicustom != desired_cicustom)
+    or (vm_item.ip is defined and vm_item.ip and (current_ipconfig | default('')) != desired_ipconfig)
+    or (vm_item.dns_servers is defined and vm_item.dns_servers and
+        (current_nameserver | default('')) != ('nameserver: ' ~ (vm_item.dns_servers | join(' '))))
+    or (vm_item.search_domains is defined and vm_item.search_domains and
+        (current_searchdomain | default('')) != ('searchdomain: ' ~ (vm_item.search_domains | join(' '))))
   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )
+
+# - name: Ensure cicustom + ipconfig set
+#   ansible.builtin.command:
+#     cmd: >-
+#       qm set {{ desired_vmid }}
+#       --cicustom user=local:snippets/cloudbase-{{ desired_vmid }}
+#       {% if vm_item.ip is defined %}
+#       --ipconfig0 {{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
+#       {% endif %}
+#   delegate_to: "{{ node_name }}"
+#   become: true
+#   register: qm_set_result
+#   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr|default('')) )
+
 
 # --- start & wait -----------------------------------------------------------
 
@@ -631,6 +565,7 @@
             msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ desired_vmid }})."
   when: vm_item.ip is defined
 
+# Bump next_vmid if auto-calculated
 - name: Bump next_vmid if we autocalculated
   set_fact:
     next_vmid: "{{ next_vmid | int + 1 }}"

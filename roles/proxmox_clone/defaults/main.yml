@@ -12,8 +12,7 @@ proxmox_defaults:
   net_model: virtio
   vlan: 30
   timeout: 300
-  pool: ""
-  ha_default_group ""
+  timezone: "EST"
 
 
 # General proxmox group defaults (used as a secondary lookup)
@@ -21,7 +20,6 @@ proxmox_defaults:
 proxmox:
   node: "{{ proxmox_defaults.node }}"
   storage: "{{ proxmox_defaults.storage }}"
-  pool: "{{ proxmox_defaults.pool }}"
   cores: 2          # prefer "cores" to match per-VM field name
   memory: 2048
   scsihw: "virtio-scsi-pci"
