@@ -17,6 +17,34 @@ groups:
 {% endfor %}
 {% endif %}
 
+# Local Administrator (or custom admin) setup
+# users:
+#   - name: "{{ vm_item.admin_user | default('Admin') }}"
+#     {% if vm_item.admin_groups is defined and vm_item.admin_groups %}
+#     groups: [{% for g in vm_item.admin_groups %}{{ g }}{% if not loop.last %}, {% endif %}{% endfor %}]
+#     {% else %}
+#     groups: Administrators
+#     {% endif %}
+#     inactive: false
+#     {% if vm_item.admin_password is defined and vm_item.admin_password %}
+#     passwd: "{{ vm_item.admin_password }}"
+#     {% endif %}
+#     {% if vm_item.admin_expiredate is defined and vm_item.admin_expiredate %}
+#     expiredate: "{{ vm_item.admin_expiredate }}"
+#     {% endif %}
+#     {% if vm_item.ssh_authorized_keys is defined and vm_item.ssh_authorized_keys %}
+#     ssh_authorized_keys:
+#       {% for key in vm_item.ssh_authorized_keys %}
+#       - "{{ key }}"
+#       {% endfor %}
+#     {% endif %}
+
+# {% if vm_item.ntp_servers is defined and vm_item.ntp_servers %}
+# ntp:
+#   enabled: true
+#   servers: {{ vm_item.ntp_servers }}
+# {% endif %}
+
 # Drop a small marker file
 write_files:
   - path: "C:\\ProgramData\\cloudbase-init\\firstboot\\README.txt"

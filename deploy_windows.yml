@@ -4,5 +4,6 @@
   gather_facts: false
   vars_files:
     - "{{ lookup('env','HOME') }}/ansible-secrets/proxmox/proxmox_creds.yml"  # optional vault with secrets
+    - "{{ lookup('env','HOME') }}/ansible-secrets/windows/domain_join.yml"  # optional vault with secrets
   roles:
     - proxmox_clone

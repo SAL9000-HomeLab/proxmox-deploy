@@ -1,0 +1,7 @@
+---
+domain_name: "ds.sal9000.tech"
+domain_join_user: "{{ domain_join_user }}"
+domain_join_pass: "{{ domain_join_pass }}"
+
+# OU where the VM should be created
+domain_join_ou: "OU=Build,OU=Servers,OU=Resources,DC=ds,DC=sal9000,DC=tech"
