@@ -7,7 +7,7 @@ proxmox_defaults:
   storage: nfs_ssd
   snippets_dir: /var/lib/vz/snippets
   disk_target: scsi0
-  full_clone: true
+  full_clone: false
   net_bridge: vmbr0
   net_model: virtio
   vlan: 30
