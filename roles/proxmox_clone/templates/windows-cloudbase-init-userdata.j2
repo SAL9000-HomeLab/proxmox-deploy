@@ -1,59 +1,256 @@
 #cloud-config
 # Cloudbase-Init user-data for Windows
-# Rendered for: {{ vm_name }} (vmid {{ desired_vmid }})
 
-{% set _hostname = (vm_item.hostname if vm_item.hostname is defined and vm_item.hostname else (vm_name | default('winvm'))) %}
-set_hostname: "{{ _hostname }}"
+{% set _hostname = (vm_item.hostname if vm_item and vm_item.hostname is defined and vm_item.hostname else (vm_name | default('winvm'))) %}
+
+# Request the hostname via cloud-config; the join script enforces short name
+hostname: "{{ _hostname }}"
+preserve_hostname: false
 
 {% if vm_item.timezone is defined and vm_item.timezone %}
 set_timezone: "{{ vm_item.timezone }}"
 {% endif %}
 
-{# Optional local groups to create / populate #}
-{% if vm_item.local_groups is defined and vm_item.local_groups %}
-groups:
-{% for gname, members in vm_item.local_groups.items() -%}
-  - {{ gname }}: [{% for m in members %}{{ m }}{% if not loop.last %}, {% endif %}{% endfor %}]
-{% endfor %}
-{% endif %}
-
-# Local Administrator (or custom admin) setup
-# users:
-#   - name: "{{ vm_item.admin_user | default('Admin') }}"
-#     {% if vm_item.admin_groups is defined and vm_item.admin_groups %}
-#     groups: [{% for g in vm_item.admin_groups %}{{ g }}{% if not loop.last %}, {% endif %}{% endfor %}]
-#     {% else %}
-#     groups: Administrators
-#     {% endif %}
-#     inactive: false
-#     {% if vm_item.admin_password is defined and vm_item.admin_password %}
-#     passwd: "{{ vm_item.admin_password }}"
-#     {% endif %}
-#     {% if vm_item.admin_expiredate is defined and vm_item.admin_expiredate %}
-#     expiredate: "{{ vm_item.admin_expiredate }}"
-#     {% endif %}
-#     {% if vm_item.ssh_authorized_keys is defined and vm_item.ssh_authorized_keys %}
-#     ssh_authorized_keys:
-#       {% for key in vm_item.ssh_authorized_keys %}
-#       - "{{ key }}"
-#       {% endfor %}
-#     {% endif %}
-
-# {% if vm_item.ntp_servers is defined and vm_item.ntp_servers %}
-# ntp:
-#   enabled: true
-#   servers: {{ vm_item.ntp_servers }}
-# {% endif %}
-
-# Drop a small marker file
 write_files:
+  # Marker file (handy for quick verification)
   - path: "C:\\ProgramData\\cloudbase-init\\firstboot\\README.txt"
     permissions: "0644"
     content: |
       Configured by Cloudbase-Init user-data.
-      Hostname: {{ _hostname }}
+      Hostname (requested): {{ _hostname }}
 
-# No WinRM here — handled by Unattend.xml during Sysprep.
+  # --- wait-network.ps1 -------------------------------------------------------
+  - path: "C:\\ProgramData\\cloudbase-init\\firstboot\\wait-network.ps1"
+    permissions: "0600"
+    content: |
+      param(
+        [string]$Domain = "{{ domain_name }}",
+        [int]$MaxAttempts = 12,
+        [int]$SleepSeconds = 10
+      )
+      Write-Host "wait-network: SRV _ldap._tcp.$Domain ($MaxAttempts attempts)"
+      $attempt = 0
+      while ($attempt -lt $MaxAttempts) {
+        $attempt++
+        try {
+          $srv = Resolve-DnsName -Name ("_ldap._tcp." + $Domain) -Type SRV -ErrorAction Stop |
+                 Where-Object { $_.QueryType -eq 'SRV' }
+          $targets = $srv | Select-Object -ExpandProperty NameTarget -Unique
+        } catch {
+          $targets = @()
+        }
+
+        if ($targets.Count -gt 0) {
+          foreach ($t in $targets) {
+            Write-Host "wait-network: test TCP 389 -> $t"
+            try {
+              if (Test-NetConnection -ComputerName $t -Port 389 -InformationLevel Quiet) {
+                Write-Host "wait-network: OK 389 -> $t"
+                exit 0
+              } else {
+                Write-Host "wait-network: failed 389 -> $t"
+              }
+            } catch {
+              Write-Host "wait-network: error testing 389 -> $t : $($_.Exception.Message)"
+            }
+          }
+        } else {
+          Write-Host "wait-network: no SRV records yet"
+        }
+
+        Start-Sleep -Seconds $SleepSeconds
+      }
+
+      Write-Error "wait-network: DNS/DC not reachable after $MaxAttempts tries"
+      exit 1
+
+  # --- join-domain.ps1 ---------------------------------------------------------
+  - path: "C:\\ProgramData\\cloudbase-init\\firstboot\\join-domain.ps1"
+    permissions: "0600"
+    content: |
+      param(
+        [string]$Domain = "{{ domain_name }}",
+        [string]$User   = "{{ domain_join_user }}",
+        [string]$Pass   = "{{ domain_join_pass }}",
+        [string]$OUPath = "{{ domain_join_ou }}",
+        [int]$MaxRetries = 6
+      )
+
+      # Transcript for deep diagnostics
+      $logDir = "C:\ProgramData\cloudbase-init\log"
+      if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+      }
+      $ts = Join-Path $logDir "join-domain.log"
+      Start-Transcript -Path $ts -Append -ErrorAction SilentlyContinue | Out-Null
+
+      # Desired short hostname (strip FQDN if present)
+      $desiredInput = "{{ _hostname }}"
+      $desired = ($desiredInput -split '\.')[0]
+
+      try { $current = (Get-CimInstance Win32_ComputerSystem).Name } catch { $current = $env:COMPUTERNAME }
+      Write-Host "join-domain: current=$current desired(short)=$desired domain=$Domain"
+
+      if ($current -ne $desired) {
+        Write-Host "join-domain: renaming to $desired and rebooting"
+        try {
+          Rename-Computer -NewName $desired -Force -ErrorAction Stop
+          Restart-Computer -Force
+          Stop-Transcript | Out-Null
+          exit 0
+        } catch {
+          Write-Error "join-domain: Rename-Computer failed: $($_.Exception.Message)"
+          Stop-Transcript | Out-Null
+          exit 1
+        }
+      }
+
+      # If already joined, exit cleanly (idempotent)
+      try {
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if ($cs.PartOfDomain -and $cs.Domain -ieq $Domain) {
+          Write-Host "join-domain: already in $Domain"
+          Stop-Transcript | Out-Null
+          exit 0
+        }
+      } catch {
+        Write-Warning "join-domain: cannot query domain membership: $($_.Exception.Message)"
+      }
+
+      # Ensure WinRM starts automatically (optional)
+      Set-Service -Name WinRM -StartupType Automatic -ErrorAction SilentlyContinue
+
+      # Extra readiness check (SRV + 389) if helper script exists
+      $waitScript = "C:\ProgramData\cloudbase-init\firstboot\wait-network.ps1"
+      if (Test-Path $waitScript) {
+        Write-Host "join-domain: invoking wait-network"
+        & $waitScript -Domain $Domain -MaxAttempts 12 -SleepSeconds 10
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "join-domain: wait-network failed"
+          Stop-Transcript | Out-Null
+          exit 1
+        }
+      }
+
+      # Build credentials (DOMAIN\user and UPN fallback)
+      function New-JoinCredential {
+        param([string]$User, [string]$Pass)
+        $sec = ConvertTo-SecureString -String $Pass -AsPlainText -Force
+        return [PSCredential]::new($User, $sec)
+      }
+      $creds = New-JoinCredential -User $User -Pass $Pass
+      $credsUpn = $null
+      if ($User -notmatch '@') {
+        $upnUser = ($User -replace '^[^\\]+\\','') + '@' + $Domain
+        $credsUpn = New-JoinCredential -User $upnUser -Pass $Pass
+        Write-Host "join-domain: prepared UPN fallback: $upnUser"
+      }
+
+      # Validate OU DN (log warning and fall back to Computers if not reachable)
+      if (-not [string]::IsNullOrWhiteSpace($OUPath)) {
+        try {
+          $null = [adsi]"LDAP://$OUPath"
+          Write-Host "join-domain: OUPath OK: $OUPath"
+        } catch {
+          Write-Warning "join-domain: OUPath invalid or not accessible: $OUPath; $($_.Exception.Message)"
+          $OUPath = $null
+        }
+      }
+
+      # Try Add-Computer with retries and fallback credential
+      $attempt = 0
+      while ($attempt -lt $MaxRetries) {
+        $attempt++
+        Write-Host "join-domain: Add-Computer attempt $attempt/$MaxRetries OU='${OUPath}' using DOMAIN\user"
+        try {
+          if ([string]::IsNullOrWhiteSpace($OUPath)) {
+            Add-Computer -DomainName $Domain -Credential $creds -ErrorAction Stop
+          } else {
+            Add-Computer -DomainName $Domain -Credential $creds -OUPath $OUPath -ErrorAction Stop
+          }
+          New-Item -ItemType File -Path "C:\ProgramData\cloudbase-init\firstboot\domain-joined.flag" -Force | Out-Null
+          Write-Host "join-domain: SUCCESS"
+          Restart-Computer -Force
+          Stop-Transcript | Out-Null
+          exit 0
+        } catch {
+          Write-Warning "join-domain: attempt $attempt with DOMAIN\user failed: $($_.Exception.Message)"
+
+          if ($credsUpn) {
+            try {
+              Write-Host "join-domain: retry attempt $attempt using UPN"
+              if ([string]::IsNullOrWhiteSpace($OUPath)) {
+                Add-Computer -DomainName $Domain -Credential $credsUpn -ErrorAction Stop
+              } else {
+                Add-Computer -DomainName $Domain -Credential $credsUpn -OUPath $OUPath -ErrorAction Stop
+              }
+              New-Item -ItemType File -Path "C:\ProgramData\cloudbase-init\firstboot\domain-joined.flag" -Force | Out-Null
+              Write-Host "join-domain: SUCCESS (UPN)"
+              Restart-Computer -Force
+              Stop-Transcript | Out-Null
+              exit 0
+            } catch {
+              Write-Warning "join-domain: UPN fallback also failed: $($_.Exception.Message)"
+            }
+          }
+
+          if ($attempt -eq 1) {
+            Write-Host "join-domain: diag nltest /dsgetdc:$Domain"
+            nltest /dsgetdc:$Domain | Out-Host
+          }
+          Start-Sleep -Seconds ([math]::Min(60, 5 * $attempt))
+        }
+      }
+
+      Write-Error "join-domain: FAILED after $MaxRetries attempts"
+      Stop-Transcript | Out-Null
+      exit 1
+
+  - path: "C:\\ProgramData\\cloudbase-init\\firstboot\\add-admins.ps1"
+    permissions: "0600"
+    content: |
+      $LocalAdminGroup = "Administrators"
+      $DomainGroup = "{{ domain_admin_group }}"
+
+      # Wait up to ~30s for domain membership to be detectable
+      for ($i=0; $i -lt 6; $i++) {
+        try {
+          $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+          if ($cs.PartOfDomain) { break }
+        } catch {}
+        Start-Sleep -Seconds 5
+      }
+
+      # If still not joined, skip gracefully (idempotent run on next boot)
+      try {
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        if (-not $cs.PartOfDomain) {
+          Write-Host "add-admins: not domain joined yet; skipping"
+          exit 0
+        }
+      } catch {
+        Write-Host "add-admins: cannot query domain membership; skipping"
+        exit 0
+      }
+
+      # Add domain group to local Administrators (idempotent)
+      try {
+        $currentMembers = Get-LocalGroupMember -Group $LocalAdminGroup -ErrorAction Stop |
+                          Select-Object -ExpandProperty Name
+        if (-not ($currentMembers -contains $DomainGroup)) {
+          Add-LocalGroupMember -Group $LocalAdminGroup -Member $DomainGroup -ErrorAction Stop
+          Write-Host "add-admins: added $DomainGroup to local Administrators"
+        } else {
+          Write-Host "add-admins: $DomainGroup already present"
+        }
+      } catch {
+        Write-Error "add-admins: failed to add group: $($_.Exception.Message)"
+      }
 
 runcmd:
   - powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-ExecutionPolicy Bypass -Scope LocalMachine -Force"
+  - powershell -ExecutionPolicy Bypass -NoProfile -Command "Start-Sleep -Seconds 10"
+  - powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\ProgramData\\cloudbase-init\\firstboot\\wait-network.ps1"
+  - powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\ProgramData\\cloudbase-init\\firstboot\\join-domain.ps1"
+  - powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\ProgramData\\cloudbase-init\\firstboot\\add-admins.ps1"
+  - powershell -ExecutionPolicy Bypass -NoProfile -Command "if (Test-Path 'C:\\ProgramData\\cloudbase-init\\firstboot\\domain-joined.flag') { Restart-Computer -Force }"
