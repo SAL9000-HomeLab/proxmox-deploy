@@ -396,43 +396,6 @@
   become: true
   when: userdata_render is defined and userdata_render.dest is defined
 
-# # --- cicustom / ipconfig -----------------------------------------------------
-
-# - name: Decide whether to update cicustom/ipconfig for VM
-#   set_fact:
-#     current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
-#     current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*', '\\0') ) | default('') }}"
-#   when: qm_config.stdout is defined
-
-# - name: Build desired cicustom and ipconfig strings
-#   set_fact:
-#     desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
-#     desired_ipconfig: >-
-#       {% if cloud_type == 'linux' and vm_item.ip is defined %}
-#       ip={{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
-#       {% else %}
-#       ""
-#       {% endif %}
-
-# - name: QM set - update cicustom/ipconfig only if different
-#   ansible.builtin.command:
-#     cmd: >-
-#       qm set {{ desired_vmid }}
-#       --cicustom {{ desired_cicustom }}
-#       {% if cloud_type == 'linux' and vm_item.ip is defined %}
-#       --ipconfig0 {{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
-#       {% endif %}
-#   delegate_to: "{{ node_name }}"
-#   become: true
-#   register: qm_set_result
-#   changed_when: qm_set_result.rc == 0 and ('updated' in (qm_set_result.stdout | lower) or 'set' in (qm_set_result.stdout | lower))
-#   when: >
-#     (current_cicustom != desired_cicustom) or
-#     (cloud_type == 'linux' and (current_ipconfig | default('') != desired_ipconfig))
-#   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )
-
-# --- cicustom / ipconfig -----------------------------------------------------
-
 - name: Decide whether to update cicustom/ipconfig/DNS for VM
   set_fact:
     current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
