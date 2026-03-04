@@ -140,6 +140,72 @@
   failed_when: false
   changed_when: false
 
+# --- adjust CPU & memory to match desired settings (idempotent) ----------
+- name: Compute desired cores and memory (vm -> proxmox -> defaults)
+  set_fact:
+    desired_cores: >-
+      {{ vm_item.cores
+         | default(proxmox.cpu if (proxmox is defined and 'cpu' in proxmox) else (proxmox_defaults.cpu if (proxmox_defaults is defined and 'cpu' in proxmox_defaults) else 2) )
+      }}
+    desired_memory: >-
+      {{ vm_item.memory
+         | default(proxmox.memory if (proxmox is defined and 'memory' in proxmox) else (proxmox_defaults.memory if (proxmox_defaults is defined and 'memory' in proxmox_defaults) else 2048) )
+      }}
+  run_once: false
+
+- name: Parse current cores & memory from qm config (if present)
+  set_fact:
+    current_cores: "{{ (qm_config.stdout | regex_search('^\\s*cores:\\s*(\\d+)', '\\1') ) | default('') }}"
+    current_memory: "{{ (qm_config.stdout | regex_search('^\\s*memory:\\s*(\\d+)', '\\1') ) | default('') }}"
+  when: qm_config is defined
+  run_once: false
+
+- name: Debug desired vs current CPU/memory (optional)
+  debug:
+    msg:
+      vm: "{{ vm_name }}"
+      desired_cores: "{{ desired_cores }}"
+      current_cores: "{{ current_cores | default('undef') }}"
+      desired_memory: "{{ desired_memory }}"
+      current_memory: "{{ current_memory | default('undef') }}"
+  run_once: false
+
+- name: Build qm set argv for CPU/memory changes (include only differing flags)
+  set_fact:
+    qm_set_cfg_argv: >-
+      {{
+        [
+          'qm', 'set', (desired_vmid | string)
+        ]
+        +
+        ( ['--cores', (desired_cores | string)] if ( (current_cores | default('')) | string != (desired_cores | string) ) else [] )
+        +
+        ( ['--memory', (desired_memory | string)] if ( (current_memory | default('')) | string != (desired_memory | string) ) else [] )
+      }}
+  run_once: false
+
+- name: Apply cores/memory changes via qm set (only when flags present)
+  ansible.builtin.command:
+    argv: "{{ qm_set_cfg_argv }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_cfg_result
+  # Mark changed when the command ran successfully (rc == 0).
+  # Also guard references so we don't fail if the var is undefined.
+  changed_when: >
+    (qm_set_cfg_result is defined) and
+    (qm_set_cfg_result.rc == 0)
+  # Fail only when the command returned non-zero and the stderr
+  # doesn't contain an expected benign message.
+  failed_when: >
+    (qm_set_cfg_result is defined) and
+    (qm_set_cfg_result.rc is not none) and
+    (qm_set_cfg_result.rc != 0) and
+    ('already configured' not in (qm_set_cfg_result.stderr | default('')))
+  when: qm_set_cfg_argv | length > 3   # only run if we added flags beyond qm set <vmid>
+  run_once: false
+
+# --- Ensure network and VLAN match desired settings (idempotent) ----------
 - name: Configure network device (bridge + VLAN)
   ansible.builtin.command:
     cmd: >-
