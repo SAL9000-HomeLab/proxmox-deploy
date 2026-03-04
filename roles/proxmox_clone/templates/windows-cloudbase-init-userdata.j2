@@ -170,6 +170,20 @@ write_files:
           }
           New-Item -ItemType File -Path "C:\ProgramData\cloudbase-init\firstboot\domain-joined.flag" -Force | Out-Null
           Write-Host "join-domain: SUCCESS"
+        try {
+            $taskName  = 'Finalize-LocalAdmins'
+            $ps        = 'PowerShell.exe'
+            $args      = '-NoProfile -ExecutionPolicy Bypass -File "C:\ProgramData\cloudbase-init\firstboot\post-boot-add-admins.ps1"'
+
+            $action    = New-ScheduledTaskAction -Execute $ps -Argument $args
+            $trigger   = New-ScheduledTaskTrigger -AtStartup  # no -Delay; wrapper sleeps 60s
+            $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+            Write-Host "join-domain: scheduled $taskName to run at startup"
+        } catch {
+            Write-Warning "join-domain: failed to register post-join task: $($_.Exception.Message)"
+        }
           Restart-Computer -Force
           Stop-Transcript | Out-Null
           exit 0
@@ -186,6 +200,20 @@ write_files:
               }
               New-Item -ItemType File -Path "C:\ProgramData\cloudbase-init\firstboot\domain-joined.flag" -Force | Out-Null
               Write-Host "join-domain: SUCCESS (UPN)"
+              try {
+                $taskName  = 'Finalize-LocalAdmins'
+                $ps        = 'PowerShell.exe'
+                $args      = '-NoProfile -ExecutionPolicy Bypass -File "C:\ProgramData\cloudbase-init\firstboot\post-boot-add-admins.ps1"'
+
+                $action    = New-ScheduledTaskAction -Execute $ps -Argument $args
+                $trigger   = New-ScheduledTaskTrigger -AtStartup  # no -Delay; wrapper sleeps 60s
+                $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+
+                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+                Write-Host "join-domain: scheduled $taskName to run at startup"
+              } catch {
+                  Write-Warning "join-domain: failed to register post-join task: $($_.Exception.Message)"
+              }
               Restart-Computer -Force
               Stop-Transcript | Out-Null
               exit 0
@@ -246,11 +274,16 @@ write_files:
       } catch {
         Write-Error "add-admins: failed to add group: $($_.Exception.Message)"
       }
+  - path: "C:\\ProgramData\\cloudbase-init\\firstboot\\post-boot-add-admins.ps1"
+    permissions: "0600"
+    content: |
+      Start-Sleep -Seconds 60
+      & "C:\ProgramData\cloudbase-init\firstboot\add-admins.ps1"
 
 runcmd:
   - powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-ExecutionPolicy Bypass -Scope LocalMachine -Force"
   - powershell -ExecutionPolicy Bypass -NoProfile -Command "Start-Sleep -Seconds 10"
   - powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\ProgramData\\cloudbase-init\\firstboot\\wait-network.ps1"
   - powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\ProgramData\\cloudbase-init\\firstboot\\join-domain.ps1"
-  - powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\ProgramData\\cloudbase-init\\firstboot\\add-admins.ps1"
-  - powershell -ExecutionPolicy Bypass -NoProfile -Command "if (Test-Path 'C:\\ProgramData\\cloudbase-init\\firstboot\\domain-joined.flag') { Restart-Computer -Force }"
+  # - powershell -ExecutionPolicy Bypass -NoProfile -File "C:\\ProgramData\\cloudbase-init\\firstboot\\add-admins.ps1"
+  # - powershell -ExecutionPolicy Bypass -NoProfile -Command "if (Test-Path 'C:\\ProgramData\\cloudbase-init\\firstboot\\domain-joined.flag') { Restart-Computer -Force }"
