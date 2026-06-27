@@ -206,18 +206,27 @@
   run_once: false
 
 # --- Ensure network and VLAN match desired settings (idempotent) ----------
-- name: Configure network device (bridge + VLAN)
-  ansible.builtin.command:
-    cmd: >-
-      qm set {{ desired_vmid }}
-      --net0 {{ vm_item.net_model | default('virtio') }},
-      bridge={{ vm_item.net_bridge | default(proxmox_defaults.net_bridge | default('vmbr0')) }}
-      {% if vm_item.vlan is defined %}
+
+- name: Build net0 configuration string
+  ansible.builtin.set_fact:
+    net0_config: >-
+      {{ vm_item.net_model | default('virtio') }},
+      bridge={{ vm_item.net_bridge }}
+      {% if vm_item.vlan is defined and vm_item.vlan | string | length > 0 %}
       ,tag={{ vm_item.vlan }}
       {% endif %}
+
+- name: Configure network device (bridge + VLAN)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ desired_vmid }}"
+      - --net0
+      - "{{ net0_config | regex_replace('\\s+', '') }}"
   delegate_to: "{{ node_name }}"
-  become: true
-  when: vm_item.net_bridge is defined or vm_item.vlan is defined
+  register: net_config_result
+  changed_when: net_config_result.rc == 0
 
 - name: Set Proxmox VM tags (if defined)
   ansible.builtin.command:
