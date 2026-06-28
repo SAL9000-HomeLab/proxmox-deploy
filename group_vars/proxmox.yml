@@ -1,4 +1,4 @@
-q# group_vars/proxmox.yml
+# group_vars/proxmox.yml
 # AWX-friendly sample vars file for deploy_windows.yml.
 #
 # Use AWX extra vars for job-driven provisioning, e.g.:
