@@ -1,103 +1,55 @@
-# group_vars/proxmox.yml
+q# group_vars/proxmox.yml
+# AWX-friendly sample vars file for deploy_windows.yml.
+#
+# Use AWX extra vars for job-driven provisioning, e.g.:
+#   provision_vms: "@vm_list.yml"
+#   proxmox:
+#     storage: nfs_ssd
+#     net_bridge: vmbr0
+#   proxmox_creds_file: "/path/to/proxmox_creds.yml"
+#   domain_join_file: "/path/to/domain_join.yml"
+#
+# Leave this file enabled if you want fallback defaults for AWX or local execution.
 
-# Proxmox connection & sane defaults (vault the token/secret)
 proxmox:
   # Default node — used if per-VM node is not set. Must match your inventory host name.
   node: pve01.lab.sal9000.tech
   storage: nfs_ssd                   # storage name where clones should be created
-  net_bridge: vmbr0
+  net_bridge: vnet30
   timeout: 300
 
-# VM provisioning list (your existing content)
-provision_vms:
-  - name: W25C-LABDC006
-    template_vmid: 9001
-    node: pve01.lab.sal9000.tech
-    vmid: 3026
-    disk_target: scsi0
-    os_type: windows
-    # hostname: W25C-TEST001.lab.sal9000.tech
-    net_bridge: vlan30
-    ip: 10.100.30.12/24
-    gateway: 10.100.30.1
-    dns: 10.100.30.101 10.100.30.111
-    cores: 4
-    memory: 8192
-    disk_size: 100G
-    tags: "windows,2025,core"
+# Optional AWX credential file paths used by deploy_windows.yml:
+# proxmox_creds_file: "~/ansible-secrets/proxmox/proxmox_creds.yml"
+# domain_join_file: "~/ansible-secrets/windows/domain_join.yml"
 
-  # - name: W25G-TEST001
-  #   template_vmid: 9002
-  #   node: pve01.lab.sal9000.tech
-  #   vmid: 3002
-  #   disk_target: scsi0
-  #   os_type: windows
-  #   hostname: W25G-TEST001.lab.sal9000.tech
-  #   ip: 10.100.30.202/24
-  #   gateway: 10.100.30.1
-  #   dns: 10.100.30.101 10.100.30.111
-  #   cores: 4
-  #   memory: 8192
-  #   disk_size: 60G
-  #   tags: "windows,2025,gui,ansible-test"
-
-  # - name: W22C-TEST001
-  #   template_vmid: 9003
-  #   node: pve01.lab.sal9000.tech
-  #   vmid: 3003
-  #   disk_target: scsi0
-  #   os_type: windows
-  #   hostname: W22C-TEST001.lab.sal9000.tech
-  #   # vlan: 30
-  #   ip: 10.100.30.203/24
-  #   gateway: 10.100.30.1
-  #   dns: 10.100.30.101 10.100.30.111
-  #   cores: 4
-  #   memory: 8192
-  #   disk_size: 60G
-  #   tags: "windows,2022,core,ansible-test"
-
-  # - name: W22G-TEST001
-  #   template_vmid: 9004
-  #   node: pve01.lab.sal9000.tech
-  #   vmid: 3004
-  #   disk_target: scsi0
-  #   os_type: windows
-  #   hostname: W22G-TEST001.lab.sal9000.tech
-  #   ip: 10.100.30.204/24
-  #   gateway: 10.100.30.1
-  #   dns: 10.100.30.101 10.100.30.111
-  #   cores: 4
-  #   memory: 8192
-  #   disk_size: 60G
-  #   tags: "windows,2022,gui,ansible-test"
-
-  # - name: W19C-TEST001
-  #   template_vmid: 9005
-  #   node: pve01.lab.sal9000.tech
-  #   vmid: 3005
-  #   disk_target: scsi0
-  #   os_type: windows
-  #   hostname: W19C-TEST001.lab.sal9000.tech
-  #   ip: 10.100.30.205/24
-  #   gateway: 10.100.30.1
-  #   dns: 10.100.30.101 10.100.30.111
-  #   cores: 4
-  #   memory: 8192
-  #   disk_size: 60G
-  #   tags: "windows,2019,core,ansible-test"
-
-  # - name: W19G-TEST001
-  #   template_vmid: 9006
-  #   node: pve01.lab.sal9000.tech
-  #   vmid: 3006
-  #   disk_target: scsi0
-  #   os_type: windows
-  #   hostname: W19G-TEST001.lab.sal9000.tech
-  #   ip: 10.100.30.206/24
-  #   gateway: 10.100.30.1
-  #   dns: 10.100.30.101 10.100.30.111
-  #   cores: 4
-  #   memory: 8192
-  #   disk_size: 60G
-  #   tags: "windows,2019,gui,ansible-test"
+# Example VM provisioning list. In AWX, override this with extra vars.
+# provision_vms:
+#   - name: W25C-LABDC006
+#     template_vmid: 9001
+#     node: pve01.lab.sal9000.tech
+#     vmid: 3026
+#     disk_target: scsi0
+#     os_type: windows
+#     net_bridge: vlan30
+#     ip: 10.100.30.12/24
+#     gateway: 10.100.30.1
+#     dns: 10.100.30.101 10.100.30.111
+#     cores: 4
+#     memory: 8192
+#     disk_size: 100G
+#     tags: "windows,2025,core"
+#
+#   - name: W25G-TEST001
+#     template_vmid: 9002
+#     node: pve01.lab.sal9000.tech
+#     vmid: 3002
+#     disk_target: scsi0
+#     os_type: windows
+#     hostname: W25G-TEST001.lab.sal9000.tech
+#     ip: 10.100.30.202/24
+#     gateway: 10.100.30.1
+#     dns: 10.100.30.101 10.100.30.111
+#     cores: 4
+#     memory: 8192
+#     disk_size: 60G
+#     tags: "windows,2025,gui,ansible-test"
