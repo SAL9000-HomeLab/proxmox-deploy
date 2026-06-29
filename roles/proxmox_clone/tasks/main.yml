@@ -12,6 +12,14 @@
 #     proxmox_defaults: "{{ lookup('vars','proxmox_defaults') | default({}) }}"
 #   run_once: true
 
+- name: Merge Proxmox defaults
+  set_fact:
+    proxmox: >-
+      {{
+        proxmox_defaults
+        | combine(proxmox | default({}), recursive=True)
+      }}
+
 - name: Ensure provision_vms present
   assert:
     that:
