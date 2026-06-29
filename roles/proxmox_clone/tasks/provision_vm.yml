@@ -471,6 +471,92 @@
   become: true
   when: userdata_render is defined and userdata_render.dest is defined
 
+- name: Safety-check NetBox auto-allocation config for IP-less VMs
+  assert:
+    that:
+      - (not (vm_item.ip is not defined or vm_item.ip == ""))
+        or not (netbox_allocate_ip | default(true) | bool)
+      - (not (vm_item.ip is not defined or vm_item.ip == ""))
+        or ((netbox.api_url | default('')) | length > 0)
+      - (not (vm_item.ip is not defined or vm_item.ip == ""))
+        or ((netbox.token | default('')) | length > 0)
+    fail_msg: >-
+      NetBox IP allocation is enabled, but required NetBox API settings are missing.
+      Set netbox.api_url, netbox.token, or disable netbox_allocate_ip when using DHCP.
+  run_once: false
+
+- name: Resolve NetBox prefix mapping for VM bridge
+  ansible.builtin.set_fact:
+    net_bridge_resolved: "{{ vm_item.net_bridge | default(proxmox_cb.get('net_bridge') | default(proxmox_defaults_cb.get('net_bridge'))) }}"
+    netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
+  run_once: false
+
+- name: Allocate IP from NetBox when ip is not defined and allocation is enabled
+  block:
+    - name: Assert NetBox allocation config exists
+      assert:
+        that:
+          - netbox_allocate_ip | default(true) | bool
+          - (netbox.api_url | default('')) | length > 0
+          - (netbox.token | default('')) | length > 0
+          - netbox_prefix_cidr | length > 0
+        fail_msg: >-
+          NetBox IP allocation is enabled but missing configuration for
+          netbox.api_url / netbox.token or prefix mapping for {{ net_bridge_resolved }}.
+
+    - name: Lookup NetBox prefix by CIDR
+      ansible.builtin.uri:
+        url: "{{ netbox.api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox.token }}"
+          Accept: "application/json"
+        validate_certs: "{{ netbox.ssl_verify | default(true) }}"
+      register: netbox_prefix_search
+      failed_when: netbox_prefix_search.status != 200
+
+    - name: Assert NetBox prefix exists for {{ netbox_prefix_cidr }}
+      assert:
+        that:
+          - netbox_prefix_search.json.count | int > 0
+        fail_msg: "No NetBox prefix found for {{ netbox_prefix_cidr }}"
+
+    - name: Set NetBox prefix id
+      set_fact:
+        netbox_prefix_id: "{{ netbox_prefix_search.json.results[0].id }}"
+
+    - name: Query NetBox for an available IP in the prefix
+      ansible.builtin.uri:
+        url: "{{ netbox.api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox.token }}"
+          Accept: "application/json"
+        validate_certs: "{{ netbox.ssl_verify | default(true) }}"
+      register: netbox_available_ip
+      failed_when: netbox_available_ip.status != 200
+
+    - name: Assert NetBox returned an available IP
+      assert:
+        that:
+          - netbox_available_ip.json.results | length > 0
+        fail_msg: "NetBox returned no available IP addresses for prefix {{ netbox_prefix_cidr }}"
+
+    - name: Set allocated VM IP from NetBox
+      set_fact:
+        resolved_vm_ip: "{{ netbox_available_ip.json.results[0].address }}"
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - netbox_allocate_ip | default(true) | bool
+  run_once: false
+
+- name: Set final VM IP variable for later configuration
+  set_fact:
+    vm_ip: >-
+      {{ vm_item.ip
+         if (vm_item.ip is defined and vm_item.ip | length > 0)
+         else (resolved_vm_ip | default('')) }}
+  run_once: false
 - name: Decide whether to update cicustom/ipconfig/DNS for VM
   set_fact:
     current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
@@ -483,8 +569,8 @@
   set_fact:
     desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
     desired_ipconfig: >-
-      {% if vm_item.ip is defined and vm_item.ip %}
-      ip={{ vm_item.ip }}{% if vm_item.gateway is defined and vm_item.gateway %},gw={{ vm_item.gateway }}{% endif %}
+      {% if vm_ip is defined and vm_ip | length > 0 %}
+      ip={{ vm_ip }}{% if vm_item.gateway is defined and vm_item.gateway %},gw={{ vm_item.gateway }}{% endif %}
       {% else %}
       ""
       {% endif %}
@@ -508,10 +594,10 @@
         +
         (
           ['--ipconfig0',
-           'ip=' ~ vm_item.ip ~ (
+           'ip=' ~ vm_ip ~ (
              (vm_item.gateway is defined and vm_item.gateway) and (',gw=' ~ vm_item.gateway) or ''
            )
-          ] if (vm_item.ip is defined and vm_item.ip) else []
+          ] if (vm_ip is defined and vm_ip | length > 0) else []
         )
         +
         (
@@ -601,7 +687,7 @@
         - name: Warn that service check failed
           ansible.builtin.debug:
             msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ desired_vmid }})."
-  when: vm_item.ip is defined
+  when: vm_ip is defined and vm_ip | length > 0
 
 # Bump next_vmid if auto-calculated
 - name: Bump next_vmid if we autocalculated

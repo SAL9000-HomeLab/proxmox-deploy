@@ -18,6 +18,13 @@ proxmox:
   net_bridge: vnet30
   timeout: 300
 
+netbox_allocate_ip: true
+netbox_prefixes_by_bridge:
+  vnet20: 10.100.20.0/24
+  vnet30: 10.100.30.0/24
+  vnet40: 10.100.40.0/24
+  vnet150: 10.100.150.0/24
+
 # Optional AWX credential file paths used by site.yml:
 # proxmox_creds_file: "~/ansible-secrets/proxmox/proxmox_creds.yml"
 # domain_join_file: "~/ansible-secrets/windows/domain_join.yml"

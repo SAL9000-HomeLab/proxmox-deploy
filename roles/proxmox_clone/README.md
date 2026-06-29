@@ -21,6 +21,10 @@ Variable reference:
   - `full` for full clone behavior; `cloudinit_userdata` for template context overrides.
 - `proxmox`: role-level defaults.
   - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `timeout`, `cpu`, `memory`.
+- NetBox auto-allocation variables.
+  - `netbox_allocate_ip`: true/false to enable NetBox allocation when `ip` is not supplied.
+  - `netbox_prefixes_by_bridge`: mapping from `net_bridge` to NetBox prefix CIDR.
+  - `netbox`: API connection settings with `api_url`, `token`, and optional `ssl_verify`.
 - AWX credential vars: `proxmox_creds_file`, `domain_join_file`.
 
 AWX example:
