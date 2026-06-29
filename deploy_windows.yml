@@ -2,7 +2,6 @@
 - name: Deploy Windows VMs from templates (SSH/qm flow)
   hosts: proxmox
   gather_facts: false
-  vars_files: "{{ [proxmox_creds_file, domain_join_file] | select('truthy') | list }}"
   roles:
     - role: proxmox_clone
       proxmox: "{{ proxmox | default({}) }}"

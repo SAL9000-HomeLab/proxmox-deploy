@@ -13,7 +13,7 @@ provision_vms:
     vmid: 3026
     disk_target: scsi0
     os_type: windows
-    net_bridge: vlan30
+    net_bridge: vnet30
     ip: 10.100.30.12/24
     gateway: 10.100.30.1
     dns: 10.100.30.101 10.100.30.111
@@ -23,7 +23,7 @@ provision_vms:
     tags: "windows,2025,core"
 proxmox:
   storage: nfs_ssd
-  net_bridge: vmbr0
+  net_bridge: vnet30
 ```
 
 If you need credential files in AWX, set `proxmox_creds_file` and/or `domain_join_file` as extra vars.
