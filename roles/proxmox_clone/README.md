@@ -13,6 +13,16 @@ Usage:
 - Ensure inventory contains the Proxmox node and `ansible_python_interpreter` set.
 - Run the role from a play that targets `proxmox` hosts.
 
+Variable reference:
+- `provision_vms`: list of VM objects.
+  - `name`, `template_vmid`, `vmid` (optional), `node` (optional), `os_type` (`linux` or `windows`).
+  - `net_bridge`, `net_model`, `vlan`, `disk_target`, `cores`, `memory`, `disk_size`, `tags`.
+  - `ip`, `gateway`, `dns_servers`, `search_domains`, `hostname`, `ssh_authorized_keys`, `winrm_ssl`.
+  - `full` for full clone behavior; `cloudinit_userdata` for template context overrides.
+- `proxmox`: role-level defaults.
+  - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `timeout`, `cpu`, `memory`.
+- AWX credential vars: `proxmox_creds_file`, `domain_join_file`.
+
 AWX example:
 ```yaml
 provision_vms:
@@ -25,7 +35,11 @@ provision_vms:
     net_bridge: vlan30
     ip: 10.100.30.12/24
     gateway: 10.100.30.1
-    dns: 10.100.30.101 10.100.30.111
+    dns_servers:
+      - 10.100.30.101
+      - 10.100.30.111
+    search_domains:
+      - lab.sal9000.tech
     cores: 4
     memory: 8192
     disk_size: 100G

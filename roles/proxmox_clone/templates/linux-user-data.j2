@@ -33,9 +33,18 @@ runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
 
-{% if vm_item.dns is defined %}
+{% if vm_item.dns_servers is defined or vm_item.dns is defined %}
 write_files:
   - path: /etc/resolv.conf
     content: |
+      {% if vm_item.dns_servers is defined %}
+      {% for ns in vm_item.dns_servers %}
+      nameserver {{ ns }}
+      {% endfor %}
+      {% else %}
       nameserver {{ vm_item.dns }}
+      {% endif %}
+      {% if vm_item.search_domains is defined %}
+      search {{ vm_item.search_domains | join(' ') }}
+      {% endif %}
 {% endif %}

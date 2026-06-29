@@ -1,5 +1,5 @@
 # group_vars/proxmox.yml
-# AWX-friendly sample vars file for deploy_windows.yml.
+# AWX-friendly sample vars file for site.yml.
 #
 # Use AWX extra vars for job-driven provisioning, e.g.:
 #   provision_vms: "@vm_list.yml"
@@ -18,7 +18,7 @@ proxmox:
   net_bridge: vnet30
   timeout: 300
 
-# Optional AWX credential file paths used by deploy_windows.yml:
+# Optional AWX credential file paths used by site.yml:
 # proxmox_creds_file: "~/ansible-secrets/proxmox/proxmox_creds.yml"
 # domain_join_file: "~/ansible-secrets/windows/domain_join.yml"
 
@@ -33,7 +33,11 @@ proxmox:
 #     net_bridge: vlan30
 #     ip: 10.100.30.12/24
 #     gateway: 10.100.30.1
-#     dns: 10.100.30.101 10.100.30.111
+#     dns_servers:
+#       - 10.100.30.101
+#       - 10.100.30.111
+#     search_domains:
+#       - lab.sal9000.tech
 #     cores: 4
 #     memory: 8192
 #     disk_size: 100G
@@ -48,7 +52,11 @@ proxmox:
 #     hostname: W25G-TEST001.lab.sal9000.tech
 #     ip: 10.100.30.202/24
 #     gateway: 10.100.30.1
-#     dns: 10.100.30.101 10.100.30.111
+#     dns_servers:
+#       - 10.100.30.101
+#       - 10.100.30.111
+#     search_domains:
+#       - lab.sal9000.tech
 #     cores: 4
 #     memory: 8192
 #     disk_size: 60G

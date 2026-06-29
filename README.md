@@ -2,7 +2,7 @@
 
 This repository deploys Windows VMs to a Proxmox cluster using SSH and `qm`.
 
-Use `deploy_windows.yml` from AWX and pass VM definitions through job extra vars.
+Use `site.yml` from AWX and pass VM definitions through job extra vars.
 
 Example AWX extra vars:
 ```yaml
@@ -16,7 +16,11 @@ provision_vms:
     net_bridge: vnet30
     ip: 10.100.30.12/24
     gateway: 10.100.30.1
-    dns: 10.100.30.101 10.100.30.111
+    dns_servers:
+      - 10.100.30.101
+      - 10.100.30.111
+    search_domains:
+      - lab.sal9000.tech
     cores: 4
     memory: 8192
     disk_size: 100G
