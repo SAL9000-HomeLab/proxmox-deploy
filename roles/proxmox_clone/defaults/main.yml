@@ -21,6 +21,7 @@ netbox:
 
 netbox_allocate_ip: true
 netbox_prefixes_by_bridge: {}
+netbox_gateway_by_bridge: {}
 
 # Default vm list (empty) - real VM definitions should be placed in group_vars or host_vars
 provision_vms: []

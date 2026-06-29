@@ -489,6 +489,7 @@
   ansible.builtin.set_fact:
     net_bridge_resolved: "{{ vm_item.net_bridge | default(proxmox_cb.get('net_bridge') | default(proxmox_defaults_cb.get('net_bridge'))) }}"
     netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
+    netbox_gateway_cidr: "{{ netbox_gateway_by_bridge[net_bridge_resolved] | default('') }}"
   run_once: false
 
 - name: Allocate IP from NetBox when ip is not defined and allocation is enabled
@@ -550,12 +551,16 @@
     - netbox_allocate_ip | default(true) | bool
   run_once: false
 
-- name: Set final VM IP variable for later configuration
+- name: Set final VM IP and gateway variables for later configuration
   set_fact:
     vm_ip: >-
       {{ vm_item.ip
          if (vm_item.ip is defined and vm_item.ip | length > 0)
          else (resolved_vm_ip | default('')) }}
+    vm_gateway: >-
+      {{ vm_item.gateway
+         if (vm_item.gateway is defined and vm_item.gateway | length > 0)
+         else (netbox_gateway_by_bridge[net_bridge_resolved] | default('')) }}
   run_once: false
 - name: Decide whether to update cicustom/ipconfig/DNS for VM
   set_fact:
@@ -570,7 +575,7 @@
     desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
     desired_ipconfig: >-
       {% if vm_ip is defined and vm_ip | length > 0 %}
-      ip={{ vm_ip }}{% if vm_item.gateway is defined and vm_item.gateway %},gw={{ vm_item.gateway }}{% endif %}
+      ip={{ vm_ip }}{% if vm_gateway is defined and vm_gateway | length > 0 %},gw={{ vm_gateway }}{% endif %}
       {% else %}
       ""
       {% endif %}
@@ -595,7 +600,7 @@
         (
           ['--ipconfig0',
            'ip=' ~ vm_ip ~ (
-             (vm_item.gateway is defined and vm_item.gateway) and (',gw=' ~ vm_item.gateway) or ''
+             (vm_gateway is defined and vm_gateway | length > 0) and (',gw=' ~ vm_gateway) or ''
            )
           ] if (vm_ip is defined and vm_ip | length > 0) else []
         )
@@ -624,7 +629,7 @@
     )
   when: >
     (current_cicustom != desired_cicustom)
-    or (vm_item.ip is defined and vm_item.ip and (current_ipconfig | default('')) != desired_ipconfig)
+    or (vm_ip is defined and vm_ip | length > 0 and (current_ipconfig | default('')) != desired_ipconfig)
     or (vm_item.dns_servers is defined and vm_item.dns_servers and
         (current_nameserver | default('')) != ('nameserver: ' ~ (vm_item.dns_servers | join(' '))))
     or (vm_item.search_domains is defined and vm_item.search_domains and
@@ -660,7 +665,7 @@
   block:
     - name: Wait for TCP port for guest (linux:22 windows:5985/5986)
       ansible.builtin.wait_for:
-        host: "{{ vm_item.ip | regex_replace('/\\d+$','') }}"
+        host: "{{ vm_ip | regex_replace('/\\d+$','') }}"
         port: "{{ 5986 if vm_item.winrm_ssl | default(False) else (5985 if cloud_type == 'windows' else 22) }}"
         timeout: "{{ proxmox_clone_wait.service_timeout | default(600) }}"
         state: started
