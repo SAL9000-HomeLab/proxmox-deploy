@@ -1,19 +1,31 @@
 ---
 # roles/proxmox_clone/tasks/main.yml
 
-- name: Set defaults from role defaults
+- name: Test first task
+  debug:
+    msg: "Role started"
+
+# - name: Set defaults from role defaults
+#   set_fact:
+#     proxmox: "{{ proxmox | default(proxmox_defaults) }}"
+#   vars:
+#     proxmox_defaults: "{{ lookup('vars','proxmox_defaults') | default({}) }}"
+#   run_once: true
+
+- name: Merge Proxmox defaults
   set_fact:
-    proxmox: "{{ proxmox | default(proxmox_defaults) }}"
-  vars:
-    proxmox_defaults: "{{ lookup('vars','proxmox_defaults') | default({}) }}"
-  run_once: true
+    proxmox: >-
+      {{
+        proxmox_defaults
+        | combine(proxmox | default({}), recursive=True)
+      }}
 
 - name: Ensure provision_vms present
   assert:
     that:
       - provision_vms is defined
       - provision_vms | length > 0
-    fail_msg: "No provision_vms defined. Put VM entries in group_vars/proxmox.yml"
+    fail_msg: "No provision_vms defined. Pass provision_vms via AWX extra vars, inventory, host_vars, or group_vars/proxmox.yml."
 
 # Loop the per-VM tasks; vm_item is the loop var
 - name: Provision VMs from list (include per-VM task file)
