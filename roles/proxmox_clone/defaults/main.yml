@@ -14,20 +14,6 @@ proxmox_defaults:
   timeout: 300
   timezone: "EST"
 
-
-# General proxmox group defaults (used as a secondary lookup)
-# Keep only non-sensitive values here; secrets belong in vaulted files.
-# proxmox:
-#   node: "{{ proxmox_defaults.node }}"
-#   storage: "{{ proxmox_defaults.storage }}"
-#   cores: 2          # prefer "cores" to match per-VM field name
-#   memory: 2048
-#   scsihw: "virtio-scsi-pci"
-#   bootdisk: scsi0
-#   net_bridge: "{{ proxmox_defaults.net_bridge }}"
-#   net_model: "{{ proxmox_defaults.net_model }}"
-#   vlan: "{{ proxmox_defaults.vlan }}"
-
 # Default vm list (empty) - real VM definitions should be placed in group_vars or host_vars
 provision_vms: []
 
@@ -42,7 +28,10 @@ provision_vms: []
 #   disk_size: 20G
 #   ip: 192.168.100.101/24
 #   gateway: 192.168.100.1
-#   dns: 1.1.1.1
+#   dns_servers:
+#     - 1.1.1.1
+#   search_domains:
+#     - example.com
 #   ssh_authorized_keys:
 #     - "ssh-rsa AAAA... user@example"
 #   cloudinit_userdata: {}  # optional additions to the jinja template context

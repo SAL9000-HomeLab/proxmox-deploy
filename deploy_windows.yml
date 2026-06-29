@@ -1,8 +1,0 @@
----
-- name: Deploy Windows VMs from templates (SSH/qm flow)
-  hosts: proxmox
-  gather_facts: false
-  roles:
-    - role: proxmox_clone
-      proxmox: "{{ proxmox | default({}) }}"
-      provision_vms: "{{ provision_vms }}"
