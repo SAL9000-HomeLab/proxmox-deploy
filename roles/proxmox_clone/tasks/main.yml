@@ -1,12 +1,16 @@
 ---
 # roles/proxmox_clone/tasks/main.yml
 
-- name: Set defaults from role defaults
-  set_fact:
-    proxmox: "{{ proxmox | default(proxmox_defaults) }}"
-  vars:
-    proxmox_defaults: "{{ lookup('vars','proxmox_defaults') | default({}) }}"
-  run_once: true
+# - name: Set defaults from role defaults
+#   set_fact:
+#     proxmox: "{{ proxmox | default(proxmox_defaults) }}"
+#   vars:
+#     proxmox_defaults: "{{ lookup('vars','proxmox_defaults') | default({}) }}"
+#   run_once: true
+
+- name: Test first task
+  debug:
+    msg: "Role started"
 
 - name: Ensure provision_vms present
   assert:
