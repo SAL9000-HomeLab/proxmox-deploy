@@ -471,15 +471,21 @@
   become: true
   when: userdata_render is defined and userdata_render.dest is defined
 
+- name: Resolve NetBox credential variables for this host
+  set_fact:
+    netbox_resolved_api_url: "{{ (netbox | default({})).api_url | default(netbox_api_url | default('')) }}"
+    netbox_resolved_token: "{{ (netbox | default({})).token | default(netbox_token | default('')) }}"
+  run_once: false
+
 - name: Safety-check NetBox auto-allocation config for IP-less VMs
   assert:
     that:
       - (not (vm_item.ip is not defined or vm_item.ip == ""))
         or not (netbox_allocate_ip | default(true) | bool)
       - (not (vm_item.ip is not defined or vm_item.ip == ""))
-        or ((netbox.api_url | default('')) | length > 0)
+        or (netbox_resolved_api_url | length > 0)
       - (not (vm_item.ip is not defined or vm_item.ip == ""))
-        or ((netbox.token | default('')) | length > 0)
+        or (netbox_resolved_token | length > 0)
     fail_msg: >-
       NetBox IP allocation is enabled, but required NetBox API settings are missing.
       Set netbox.api_url, netbox.token, or disable netbox_allocate_ip when using DHCP.
@@ -498,8 +504,8 @@
       assert:
         that:
           - netbox_allocate_ip | default(true) | bool
-          - (netbox.api_url | default('')) | length > 0
-          - (netbox.token | default('')) | length > 0
+          - (netbox_resolved_api_url | default('')) | length > 0
+          - (netbox_resolved_token | default('')) | length > 0
           - netbox_prefix_cidr | length > 0
         fail_msg: >-
           NetBox IP allocation is enabled but missing configuration for
@@ -507,10 +513,10 @@
 
     - name: Lookup NetBox prefix by CIDR
       ansible.builtin.uri:
-        url: "{{ netbox.api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
         method: GET
         headers:
-          Authorization: "Token {{ netbox.token }}"
+          Authorization: "Token {{ netbox_resolved_token }}"
           Accept: "application/json"
         validate_certs: "{{ netbox.ssl_verify | default(true) }}"
       register: netbox_prefix_search
@@ -528,10 +534,10 @@
 
     - name: Query NetBox for an available IP in the prefix
       ansible.builtin.uri:
-        url: "{{ netbox.api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
         method: GET
         headers:
-          Authorization: "Token {{ netbox.token }}"
+          Authorization: "Token {{ netbox_resolved_token }}"
           Accept: "application/json"
         validate_certs: "{{ netbox.ssl_verify | default(true) }}"
       register: netbox_available_ip

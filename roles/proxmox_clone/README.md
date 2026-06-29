@@ -22,7 +22,7 @@ Variable reference:
 - `proxmox`: role-level defaults.
   - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `timeout`, `cpu`, `memory`.
 - NetBox auto-allocation variables.
-  - `netbox_allocate_ip`: true/false to enable NetBox allocation when `ip` is not supplied.
+  - `netbox_allocate_ip`: true/false to enable NetBox allocation when `ip` is not supplied. If you want DHCP instead, set this to `false`.
   - `netbox_prefixes_by_bridge`: mapping from `net_bridge` to NetBox prefix CIDR.
   - `netbox_gateway_by_bridge`: mapping from `net_bridge` to the default gateway for that subnet.
   - `netbox`: API connection settings with `api_url`, `token`, and optional `ssl_verify`.
