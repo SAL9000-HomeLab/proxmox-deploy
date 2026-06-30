@@ -539,7 +539,7 @@
         url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
         method: GET
         headers:
-          Authorization: "Token {{ netbox_resolved_token }}"
+          Authorization: "Bearer {{ netbox_resolved_token }}"
           Accept: "application/json"
         validate_certs: "{{ netbox.ssl_verify | default(true) }}"
       register: netbox_prefix_search
@@ -560,7 +560,7 @@
         url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
         method: GET
         headers:
-          Authorization: "Token {{ netbox_resolved_token }}"
+          Authorization: "Bearer {{ netbox_resolved_token }}"
           Accept: "application/json"
         validate_certs: "{{ netbox.ssl_verify | default(true) }}"
       register: netbox_available_ip
