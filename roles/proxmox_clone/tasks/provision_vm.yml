@@ -566,6 +566,12 @@
       register: netbox_available_ip
       failed_when: netbox_available_ip.status != 200
 
+# --- debug NetBox response and assert available IP exists --->
+    - name: Show NetBox response
+      debug:
+        var: netbox_available_ip.json
+# --- end debug NetBox response and assert available IP exists --->
+
     - name: Assert NetBox returned an available IP
       assert:
         that:
