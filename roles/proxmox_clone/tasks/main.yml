@@ -5,13 +5,6 @@
   debug:
     msg: "Role started"
 
-# - name: Set defaults from role defaults
-#   set_fact:
-#     proxmox: "{{ proxmox | default(proxmox_defaults) }}"
-#   vars:
-#     proxmox_defaults: "{{ lookup('vars','proxmox_defaults') | default({}) }}"
-#   run_once: true
-
 - name: Merge Proxmox defaults
   set_fact:
     proxmox: >-

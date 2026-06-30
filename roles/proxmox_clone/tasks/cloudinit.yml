@@ -1,0 +1,127 @@
+---
+- name: Render userdata locally (cloudbase for windows, cloud-init for linux)
+  ansible.builtin.template:
+    src: "{{ 'windows-cloudbase-init-userdata.j2' if cloud_type == 'windows' else 'linux-user-data.j2' }}"
+    dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
+  delegate_to: localhost
+  register: userdata_render
+
+- name: Resolve raw snippets dir from variables (safe)
+  set_fact:
+    _proxmox_snippets_raw: >-
+      {{ (
+           (proxmox.snippets_dir if (proxmox is defined and proxmox is mapping and 'snippets_dir' in proxmox) else
+            (proxmox_defaults.snippets_dir if (proxmox_defaults is defined and proxmox_defaults is mapping and 'snippets_dir' in proxmox_defaults) else
+             '/var/lib/vz/snippets'
+            )
+           )
+         ) }}
+  run_once: false
+
+- name: Normalize snippets_dir_resolved (force leading slash, collapse doubles)
+  set_fact:
+    snippets_dir_resolved: >-
+      {{ ('/' ~ (_proxmox_snippets_raw | default('var/lib/vz/snippets'))) | regex_replace('/+','/') }}
+  run_once: false
+
+- name: Debug resolved snippets_dir
+  debug:
+    msg:
+      proxmox_raw: "{{ _proxmox_snippets_raw | default('undef') }}"
+      snippets_dir_resolved: "{{ snippets_dir_resolved | default('undef') }}"
+  run_once: false
+
+- name: Ensure snippets directory exists on node (create if missing)
+  ansible.builtin.file:
+    path: "{{ snippets_dir_resolved }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  delegate_to: "{{ node_name }}"
+  become: true
+
+- name: Copy userdata/snippet to node snippets dir (using resolved dir)
+  ansible.builtin.copy:
+    src: "{{ userdata_render.dest }}"
+    dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ( 'cloudbase-' if cloud_type == 'windows' else 'user-data-' ) ~ (desired_vmid | string) }}"
+    owner: root
+    mode: '0600'
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: userdata_render is defined and userdata_render.dest is defined
+
+
+- name: Decide whether to update cicustom/ipconfig/DNS for VM
+  set_fact:
+    current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
+    current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*', '\\0') ) | default('') }}"
+    current_nameserver: "{{ (qm_config.stdout | regex_search('nameserver:.*', '\\0') ) | default('') }}"
+    current_searchdomain: "{{ (qm_config.stdout | regex_search('searchdomain:.*', '\\0') ) | default('') }}"
+  when: qm_config.stdout is defined
+
+- name: Build desired cicustom and ip/DNS strings (works for Linux & Windows)
+  set_fact:
+    desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
+    desired_ipconfig: >-
+      {% if vm_ip is defined and vm_ip | length > 0 %}
+      ip={{ vm_ip }}{% if vm_gateway is defined and vm_gateway | length > 0 %},gw={{ vm_gateway }}{% endif %}
+      {% else %}
+      ""
+      {% endif %}
+    desired_nameserver: >-
+      {% if vm_item.dns_servers is defined and vm_item.dns_servers %}
+      {{ (vm_item.dns_servers | join(' ')) }}
+      {% else %}""{% endif %}
+    desired_searchdomain: >-
+      {% if vm_item.search_domains is defined and vm_item.search_domains %}
+      {{ (vm_item.search_domains | join(' ')) }}
+      {% else %}""{% endif %}
+
+- name: Build qm set argv (only include flags that have values)
+  set_fact:
+    qm_set_argv: >-
+      {{
+        [
+          'qm', 'set', (desired_vmid | string),
+          '--cicustom', desired_cicustom
+        ]
+        +
+        (
+          ['--ipconfig0',
+           'ip=' ~ vm_ip ~ (
+             (vm_gateway is defined and vm_gateway | length > 0) and (',gw=' ~ vm_gateway) or ''
+           )
+          ] if (vm_ip is defined and vm_ip | length > 0) else []
+        )
+        +
+        (
+          ['--nameserver', (vm_item.dns_servers | join(' '))]
+          if (vm_item.dns_servers is defined and (vm_item.dns_servers | length) > 0) else []
+        )
+        +
+        (
+          ['--searchdomain', (vm_item.search_domains | join(' '))]
+          if (vm_item.search_domains is defined and (vm_item.search_domains | length) > 0) else []
+        )
+      }}
+
+- name: QM set - update cicustom/ipconfig/DNS only if different
+  ansible.builtin.command:
+    argv: "{{ qm_set_argv }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_result
+  changed_when: >
+    qm_set_result.rc == 0 and (
+      'updated' in (qm_set_result.stdout | default('') | lower)
+      or 'set' in (qm_set_result.stdout | default('') | lower)
+    )
+  when: >
+    (current_cicustom != desired_cicustom)
+    or (vm_ip is defined and vm_ip | length > 0 and (current_ipconfig | default('')) != desired_ipconfig)
+    or (vm_item.dns_servers is defined and vm_item.dns_servers and
+        (current_nameserver | default('')) != ('nameserver: ' ~ (vm_item.dns_servers | join(' '))))
+    or (vm_item.search_domains is defined and vm_item.search_domains and
+        (current_searchdomain | default('')) != ('searchdomain: ' ~ (vm_item.search_domains | join(' '))))
+  failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )

@@ -1,0 +1,320 @@
+---
+- name: Clone template into new VMID (when not exists) using qm (full vs linked)
+  block:
+    - name: Clone (full clone path)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+          --full
+          --storage {{ storage_name }}
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: qm_clone_full
+      changed_when: qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower) or 'created' in (qm_clone_full.stdout | lower))
+      failed_when: qm_clone_full.rc != 0 and ('already exists' not in (qm_clone_full.stderr | default('')) )
+      when:
+        - not target_exists
+        - use_full_clone | bool
+
+    - name: Clone (linked clone path — no --storage)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: qm_clone_linked
+      changed_when: qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower) or 'created' in (qm_clone_linked.stdout | lower))
+      failed_when: qm_clone_linked.rc != 0 and ('already exists' not in (qm_clone_linked.stderr | default('')) )
+      when:
+        - not target_exists
+        - not (use_full_clone | bool)
+
+  when: not target_exists
+
+- name: Gather VM config after ensure (qm config)
+  ansible.builtin.command:
+    cmd: qm config {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_config
+  failed_when: false
+  changed_when: false
+
+# --- adjust CPU & memory to match desired settings (idempotent) ----------
+- name: Compute desired cores and memory (vm -> proxmox -> defaults)
+  set_fact:
+    desired_cores: >-
+      {{ vm_item.cores
+         | default(proxmox.cpu if (proxmox is defined and 'cpu' in proxmox) else (proxmox_defaults.cpu if (proxmox_defaults is defined and 'cpu' in proxmox_defaults) else 2) )
+      }}
+    desired_memory: >-
+      {{ vm_item.memory
+         | default(proxmox.memory if (proxmox is defined and 'memory' in proxmox) else (proxmox_defaults.memory if (proxmox_defaults is defined and 'memory' in proxmox_defaults) else 2048) )
+      }}
+  run_once: false
+
+- name: Parse current cores & memory from qm config (if present)
+  set_fact:
+    current_cores: "{{ (qm_config.stdout | regex_search('^\\s*cores:\\s*(\\d+)', '\\1') ) | default('') }}"
+    current_memory: "{{ (qm_config.stdout | regex_search('^\\s*memory:\\s*(\\d+)', '\\1') ) | default('') }}"
+  when: qm_config is defined
+  run_once: false
+
+- name: Debug desired vs current CPU/memory (optional)
+  debug:
+    msg:
+      vm: "{{ vm_name }}"
+      desired_cores: "{{ desired_cores }}"
+      current_cores: "{{ current_cores | default('undef') }}"
+      desired_memory: "{{ desired_memory }}"
+      current_memory: "{{ current_memory | default('undef') }}"
+  run_once: false
+
+- name: Build qm set argv for CPU/memory changes (include only differing flags)
+  set_fact:
+    qm_set_cfg_argv: >-
+      {{
+        [
+          'qm', 'set', (desired_vmid | string)
+        ]
+        +
+        ( ['--cores', (desired_cores | string)] if ( (current_cores | default('')) | string != (desired_cores | string) ) else [] )
+        +
+        ( ['--memory', (desired_memory | string)] if ( (current_memory | default('')) | string != (desired_memory | string) ) else [] )
+      }}
+  run_once: false
+
+- name: Apply cores/memory changes via qm set (only when flags present)
+  ansible.builtin.command:
+    argv: "{{ qm_set_cfg_argv }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_cfg_result
+  # Mark changed when the command ran successfully (rc == 0).
+  # Also guard references so we don't fail if the var is undefined.
+  changed_when: >
+    (qm_set_cfg_result is defined) and
+    (qm_set_cfg_result.rc == 0)
+  # Fail only when the command returned non-zero and the stderr
+  # doesn't contain an expected benign message.
+  failed_when: >
+    (qm_set_cfg_result is defined) and
+    (qm_set_cfg_result.rc is not none) and
+    (qm_set_cfg_result.rc != 0) and
+    ('already configured' not in (qm_set_cfg_result.stderr | default('')))
+  when: qm_set_cfg_argv | length > 3   # only run if we added flags beyond qm set <vmid>
+  run_once: false
+
+# --- Ensure network and VLAN match desired settings (idempotent) ----------
+
+- name: Build net0 configuration string
+  ansible.builtin.set_fact:
+    net0_config: >-
+      {{ vm_item.net_model | default('virtio') }},
+      bridge={{ vm_item.net_bridge }}
+      {% if vm_item.vlan is defined and vm_item.vlan | string | length > 0 %}
+      ,tag={{ vm_item.vlan }}
+      {% endif %}
+
+- name: Configure network device (bridge + VLAN)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ desired_vmid }}"
+      - --net0
+      - "{{ net0_config | regex_replace('\\s+', '') }}"
+  delegate_to: "{{ node_name }}"
+  register: net_config_result
+  changed_when: net_config_result.rc == 0
+
+- name: Set Proxmox VM tags (if defined)
+  ansible.builtin.command:
+    cmd: qm set {{ desired_vmid }} --tags {{ vm_item.tags }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: vm_item.tags is defined
+
+# --- disk size parsing -------------------------------------------------------
+
+- name: Parse current bootdisk raw/fallback lists from qm config (safe)
+  set_fact:
+    current_disk_size_raw_list: >-
+      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*size=([^,\\n\\s]+)') }}
+    current_disk_size_fallback_list: >-
+      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*,([^,\\n\\s]*G)') }}
+  vars:
+    disk_target: "{{ disk_target }}"
+  run_once: false
+
+- name: Pick first parsed disk size raw & fallback into simple vars
+  set_fact:
+    current_disk_size_raw: "{{ (current_disk_size_raw_list | first) | default('') }}"
+    current_disk_size_fallback: "{{ (current_disk_size_fallback_list | first) | default('') }}"
+  run_once: false
+
+- name: Compute final current_disk_size (prefer raw then fallback)
+  set_fact:
+    current_disk_size: >-
+      {{ current_disk_size_raw if (current_disk_size_raw is defined and (current_disk_size_raw | length) > 0)
+         else (current_disk_size_fallback | default('')) }}
+  run_once: false
+
+- name: Compute desired_disk_gib and current_disk_gib (numeric GiB)
+  set_fact:
+    desired_disk_gib: >-
+      {{ (vm_item.disk_size | default('0'))
+         | regex_replace('(?i)g$','')
+         | regex_replace('[^0-9\\.]+','')
+         | float | default(0) }}
+    current_disk_gib: >-
+      {{ (current_disk_size | default('0'))
+         | regex_replace('(?i)g$','')
+         | regex_replace('[^0-9\\.]+','')
+         | float | default(0) }}
+  when: vm_item.disk_size is defined
+  run_once: false
+
+- name: Decide whether resize is needed (compare numeric GiB)
+  set_fact:
+    should_resize: "{{ (desired_disk_gib | float) > (current_disk_gib | float) }}"
+  when: vm_item.disk_size is defined
+  run_once: false
+
+# --- robust resize block -----------------------------------------------------
+
+- name: Discover candidate disk keys from qm config
+  set_fact:
+    _qm_disk_keys: >-
+      {{ (qm_config.stdout | default(''))
+         | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
+  run_once: false
+
+- name: Resolve disk_target_resolved (vm_item -> explicit disk_target -> parse qm_config -> default scsi0)
+  set_fact:
+    disk_target_resolved: >-
+      {{
+        (vm_item.disk_target | default(''))
+        | default( (disk_target | default('')) )
+        | default( (_qm_disk_keys | first) | default('scsi0') )
+      }}
+  run_once: false
+
+- name: Debug resize inputs (show resolved disk target)
+  debug:
+    msg:
+      vmid: "{{ desired_vmid }}"
+      vm_item_disk_target: "{{ vm_item.disk_target | default('UNSET') }}"
+      disk_target_from_vars: "{{ disk_target | default('UNSET') }}"
+      parsed_disk_keys: "{{ _qm_disk_keys }}"
+      disk_target_resolved: "{{ disk_target_resolved }}"
+      vm_item_disk_size: "{{ vm_item.disk_size | default('UNSET') }}"
+      target_exists: "{{ target_exists | default('undef') }}"
+  run_once: false
+
+- name: Ensure disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
+  set_fact:
+    _qm_disk_keys: >-
+      {{ (qm_config.stdout | default('')) | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
+    disk_target_resolved: >-
+      {{
+        (vm_item.disk_target | default(''))
+        | default( disk_target | default(proxmox_defaults.disk_target | default('')) )
+        | default( (_qm_disk_keys | first) | default('scsi0') )
+      }}
+  run_once: false
+
+- name: Try qm disk resize (preferred syntax)
+  ansible.builtin.command:
+    cmd: >-
+      qm disk resize {{ desired_vmid }} {{ disk_target_resolved }} {{ vm_item.disk_size }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_resize_try1
+  failed_when: false
+  when:
+    - not target_exists
+    - vm_item.disk_size is defined
+    - should_resize | default(true)
+
+- name: Compute qm_resize_ok (robustly handle rc or results[])
+  set_fact:
+    qm_resize_ok: >-
+      {{ (qm_resize_try1 is defined) and (
+           (qm_resize_try1.rc is defined and (qm_resize_try1.rc | int) == 0)
+           or
+           (qm_resize_try1.results is defined
+             and (qm_resize_try1.results | length) > 0
+             and (qm_resize_try1.results[0].rc is defined)
+             and (qm_resize_try1.results[0].rc | int) == 0)
+         )
+      }}
+  when: qm_resize_try1 is defined
+  run_once: false
+
+- name: Try legacy qm resize if first attempt failed with argument errors
+  ansible.builtin.command:
+    cmd: >-
+      qm resize {{ desired_vmid }} {{ disk_target_resolved }} {{ vm_item.disk_size }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_resize_try2
+  failed_when: false
+  when:
+    - not target_exists
+    - vm_item.disk_size is defined
+    - should_resize | default(true)
+    - qm_resize_ok is defined and qm_resize_ok == false
+
+- name: Compute qm_resize2_ok (robustly handle rc or results[])
+  set_fact:
+    qm_resize2_ok: >-
+      {{ (qm_resize_try2 is defined) and (
+           (qm_resize_try2.rc is defined and (qm_resize_try2.rc | int) == 0)
+           or
+           (qm_resize_try2.results is defined
+             and (qm_resize_try2.results | length) > 0
+             and (qm_resize_try2.results[0].rc is defined)
+             and (qm_resize_try2.results[0].rc | int) == 0)
+         )
+      }}
+  when: qm_resize_try2 is defined
+  run_once: false
+
+- name: Determine final resize status and fail if both attempts failed (safe checks)
+  fail:
+    msg: |
+      Both resize attempts failed for VM {{ desired_vmid }} disk {{ disk_target_resolved | default('NONE') }} -> {{ vm_item.disk_size }}.
+      try1 rc={{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined) else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and (qm_resize_try1.results|length) > 0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
+      try1 stdout={{ (qm_resize_try1.stdout | default('')) }}
+      try1 stderr={{ (qm_resize_try1.stderr | default('')) }}
+
+      try2 rc={{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined) else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and (qm_resize_try2.results|length) > 0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
+      try2 stdout={{ (qm_resize_try2.stdout | default('')) }}
+      try2 stderr={{ (qm_resize_try2.stderr | default('')) }}
+  when:
+    - not target_exists
+    - vm_item.disk_size is defined
+    - ( (qm_resize_ok is not defined or qm_resize_ok == false) and (qm_resize2_ok is not defined or qm_resize2_ok == false) )
+
+- name: Mark resize changed if any attempt succeeded (safe)
+  set_fact:
+    qm_resize_changed: true
+  when:
+    - (qm_resize_ok | default(false)) or (qm_resize2_ok | default(false))
+
+- name: Debug resize attempt outcomes (optional)
+  debug:
+    msg:
+      qm_resize_ok: "{{ qm_resize_ok | default('undef') }}"
+      qm_resize2_ok: "{{ qm_resize2_ok | default('undef') }}"
+      qm_resize_try1_rc: >-
+        {{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined)
+            else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and (qm_resize_try1.results|length)>0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
+      qm_resize_try2_rc: >-
+        {{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined)
+            else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and (qm_resize_try2.results|length)>0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
+  when: vm_item.disk_size is defined
+  run_once: false

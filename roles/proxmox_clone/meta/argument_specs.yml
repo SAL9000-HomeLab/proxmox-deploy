@@ -1,0 +1,16 @@
+---
+argument_specs:
+
+  main:
+
+    options:
+
+      provision_vms:
+        type: list
+        required: true
+
+      proxmox:
+        type: dict
+
+      allocate_ip:
+        type: bool

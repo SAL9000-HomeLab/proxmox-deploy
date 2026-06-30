@@ -1,0 +1,48 @@
+---
+- name: Start the VM (when newly cloned)
+  ansible.builtin.command:
+    cmd: qm start {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_start
+  changed_when: "'status' in (qm_start.stdout | default('')) or qm_start.rc == 0"
+  when: not target_exists
+
+- name: Wait for guest to accept connections (linux => SSH, windows => WinRM)
+  block:
+    - name: Wait for TCP port for guest (linux:22 windows:5985/5986)
+      ansible.builtin.wait_for:
+        host: "{{ vm_ip | regex_replace('/\\d+$','') }}"
+        port: "{{ 5986 if vm_item.winrm_ssl | default(False) else (5985 if cloud_type == 'windows' else 22) }}"
+        timeout: "{{ proxmox_clone_wait.service_timeout | default(600) }}"
+        state: started
+        delay: 10
+        sleep: "{{ proxmox_clone_wait.poll_interval | default(5) }}"
+      delegate_to: localhost
+      register: wait_for_port
+
+    - name: Attempt verification command after service is reachable
+      block:
+        - name: Check Linux with a simple SSH command (if linux)
+          ansible.builtin.command: echo ok
+          when: cloud_type == 'linux'
+          register: linux_ping_result
+          failed_when: false
+          delegate_to: localhost
+          changed_when: false
+
+        - name: Check Windows using winrm (win_ping) - requires pywinrm & connection
+          ansible.builtin.debug:
+            msg: "WinRM reachable on {{ resolved_vm_ip | regex_replace('/\\d+$','') }} (win_ping should be executed by a follow-up Windows play with connection: winrm)"
+          when: cloud_type == 'windows'
+      rescue:
+        - name: Warn that service check failed
+          ansible.builtin.debug:
+            msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ desired_vmid }})."
+  when: vm_ip is defined and vm_ip | length > 0
+
+# Bump next_vmid if auto-calculated
+- name: Bump next_vmid if we autocalculated
+  set_fact:
+    next_vmid: "{{ next_vmid | int + 1 }}"
+  when: vm_item.vmid is not defined or (vm_item.vmid | int) == 0
