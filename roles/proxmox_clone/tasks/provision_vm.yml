@@ -570,10 +570,23 @@
     #   register: netbox_available_ip
     #   failed_when: netbox_available_ip.status != 200
 
+    - name: Lookup IP range
+      uri:
+        url: >-
+          {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/
+        method: GET
+        headers:
+          Authorization: "Bearer {{ netbox_resolved_token }}"
+          Accept: application/json
+      register: netbox_ip_range
+
+    - debug:
+        var: netbox_ip_range.json
+
     - name: Allocate next IP from NetBox range
       uri:
         url: >-
-          {{ netbox_resolved_api_url }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/available-ips/
+          {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/available-ips/
         method: POST
         headers:
           Authorization: "Token {{ netbox_resolved_token }}"
