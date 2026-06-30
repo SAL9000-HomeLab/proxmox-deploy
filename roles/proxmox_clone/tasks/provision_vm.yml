@@ -498,13 +498,6 @@
     fail_msg: >-
       NetBox IP allocation is enabled, but required NetBox API settings are missing.
 
-# - name: Resolve NetBox prefix mapping for VM bridge
-#   ansible.builtin.set_fact:
-#     net_bridge_resolved: "{{ vm_item.net_bridge | default(proxmox_cb.get('net_bridge') | default(proxmox_defaults_cb.get('net_bridge'))) }}"
-#     netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
-#     netbox_gateway_cidr: "{{ netbox_gateway_by_bridge[net_bridge_resolved] | default('') }}"
-#   run_once: false
-
 - name: Resolve VM bridge
   ansible.builtin.set_fact:
     net_bridge_resolved: >-
@@ -522,53 +515,10 @@
 
 - name: Resolve NetBox prefix mapping
   ansible.builtin.set_fact:
-    netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
     netbox_gateway_cidr: "{{ netbox_gateway_by_bridge[net_bridge_resolved] | default('') }}"
 
 - name: Allocate IP from NetBox when ip is not defined and allocation is enabled
   block:
-    # - name: Assert NetBox allocation config exists
-    #   assert:
-    #     that:
-    #       - netbox_allocate_ip | default(true) | bool
-    #       - (netbox_resolved_api_url | default('')) | length > 0
-    #       - (netbox_resolved_token | default('')) | length > 0
-    #       - netbox_prefix_cidr | length > 0
-    #     fail_msg: >-
-    #       NetBox IP allocation is enabled but missing configuration for
-    #       netbox.api_url / netbox.token or prefix mapping for {{ net_bridge_resolved }}.
-
-    # - name: Lookup NetBox prefix by CIDR
-    #   ansible.builtin.uri:
-    #     url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
-    #     method: GET
-    #     headers:
-    #       Authorization: "Bearer {{ netbox_resolved_token }}"
-    #       Accept: "application/json"
-    #     validate_certs: "{{ netbox.ssl_verify | default(true) }}"
-    #   register: netbox_prefix_search
-    #   failed_when: netbox_prefix_search.status != 200
-
-    # - name: Assert NetBox prefix exists for {{ netbox_prefix_cidr }}
-    #   assert:
-    #     that:
-    #       - netbox_prefix_search.json.count | int > 0
-    #     fail_msg: "No NetBox prefix found for {{ netbox_prefix_cidr }}"
-
-    # - name: Set NetBox prefix id
-    #   set_fact:
-    #     netbox_prefix_id: "{{ netbox_prefix_search.json.results[0].id }}"
-
-    # - name: Query NetBox for an available IP in the prefix
-    #   ansible.builtin.uri:
-    #     url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
-    #     method: GET
-    #     headers:
-    #       Authorization: "Bearer {{ netbox_resolved_token }}"
-    #       Accept: "application/json"
-    #     validate_certs: "{{ netbox.ssl_verify | default(true) }}"
-    #   register: netbox_available_ip
-    #   failed_when: netbox_available_ip.status != 200
 
     - name: Lookup IP range
       uri:
@@ -699,20 +649,6 @@
     or (vm_item.search_domains is defined and vm_item.search_domains and
         (current_searchdomain | default('')) != ('searchdomain: ' ~ (vm_item.search_domains | join(' '))))
   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )
-
-# - name: Ensure cicustom + ipconfig set
-#   ansible.builtin.command:
-#     cmd: >-
-#       qm set {{ desired_vmid }}
-#       --cicustom user=local:snippets/cloudbase-{{ desired_vmid }}
-#       {% if vm_item.ip is defined %}
-#       --ipconfig0 {{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
-#       {% endif %}
-#   delegate_to: "{{ node_name }}"
-#   become: true
-#   register: qm_set_result
-#   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr|default('')) )
-
 
 # --- start & wait -----------------------------------------------------------
 
