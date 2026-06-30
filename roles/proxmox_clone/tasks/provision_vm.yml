@@ -750,7 +750,7 @@
 
         - name: Check Windows using winrm (win_ping) - requires pywinrm & connection
           ansible.builtin.debug:
-            msg: "WinRM reachable on {{ vm_item.ip | regex_replace('/\\d+$','') }} (win_ping should be executed by a follow-up Windows play with connection: winrm)"
+            msg: "WinRM reachable on {{ resolved_vm_ip | regex_replace('/\\d+$','') }} (win_ping should be executed by a follow-up Windows play with connection: winrm)"
           when: cloud_type == 'windows'
       rescue:
         - name: Warn that service check failed
