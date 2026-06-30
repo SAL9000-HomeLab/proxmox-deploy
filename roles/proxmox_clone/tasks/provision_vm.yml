@@ -534,16 +534,16 @@
     #       NetBox IP allocation is enabled but missing configuration for
     #       netbox.api_url / netbox.token or prefix mapping for {{ net_bridge_resolved }}.
 
-    - name: Lookup NetBox prefix by CIDR
-      ansible.builtin.uri:
-        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ netbox_resolved_token }}"
-          Accept: "application/json"
-        validate_certs: "{{ netbox.ssl_verify | default(true) }}"
-      register: netbox_prefix_search
-      failed_when: netbox_prefix_search.status != 200
+    # - name: Lookup NetBox prefix by CIDR
+    #   ansible.builtin.uri:
+    #     url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
+    #     method: GET
+    #     headers:
+    #       Authorization: "Bearer {{ netbox_resolved_token }}"
+    #       Accept: "application/json"
+    #     validate_certs: "{{ netbox.ssl_verify | default(true) }}"
+    #   register: netbox_prefix_search
+    #   failed_when: netbox_prefix_search.status != 200
 
     - name: Assert NetBox prefix exists for {{ netbox_prefix_cidr }}
       assert:
@@ -555,16 +555,29 @@
       set_fact:
         netbox_prefix_id: "{{ netbox_prefix_search.json.results[0].id }}"
 
-    - name: Query NetBox for an available IP in the prefix
-      ansible.builtin.uri:
-        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
-        method: GET
+    # - name: Query NetBox for an available IP in the prefix
+    #   ansible.builtin.uri:
+    #     url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
+    #     method: GET
+    #     headers:
+    #       Authorization: "Bearer {{ netbox_resolved_token }}"
+    #       Accept: "application/json"
+    #     validate_certs: "{{ netbox.ssl_verify | default(true) }}"
+    #   register: netbox_available_ip
+    #   failed_when: netbox_available_ip.status != 200
+
+    - name: Allocate next IP from NetBox range
+      uri:
+        url: >-
+          {{ netbox_resolved_api_url }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/available-ips/
+        method: POST
         headers:
-          Authorization: "Bearer {{ netbox_resolved_token }}"
-          Accept: "application/json"
-        validate_certs: "{{ netbox.ssl_verify | default(true) }}"
+          Authorization: "Token {{ netbox_resolved_token }}"
+          Accept: application/json
+        body_format: json
+        body: {}
+        status_code: 201
       register: netbox_available_ip
-      failed_when: netbox_available_ip.status != 200
 
 # --- debug NetBox response and assert available IP exists --->
     - name: Show NetBox response
@@ -580,7 +593,7 @@
 
     - name: Set allocated VM IP from NetBox
       set_fact:
-        resolved_vm_ip: "{{ netbox_available_ip.json.results[0].address }}"
+        resolved_vm_ip: "{{ netbox_available_ip.json.address }}"
   when:
     - (vm_item.ip is not defined or vm_item.ip == "")
     - netbox_allocate_ip | default(true) | bool
