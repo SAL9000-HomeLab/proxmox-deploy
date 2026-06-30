@@ -67,7 +67,7 @@
           {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/available-ips/
         method: POST
         headers:
-          Authorization: "Token {{ netbox_resolved_token }}"
+          Authorization: "Bearer {{ netbox_resolved_token }}"
           Accept: application/json
         body_format: json
         body: {}
@@ -107,15 +107,9 @@
 
 - name: Normalize networking
   set_fact:
-
     vm_network:
-
-      ip: "{{ resolved_vm_ip }}"
-
-      cidr: "{{ resolved_vm_cidr }}"
-
-      gateway: "{{ gateway_resolved }}"
-
-      dns: "{{ dns_servers_resolved }}"
-
+      ip: "{{ vm_ip | ansible.utils.ipaddr('address') }}"
+      cidr: "{{ vm_ip }}"
+      gateway: "{{ vm_gateway }}"
+      dns: "{{ vm_item.dns_servers | default([]) }}"
       bridge: "{{ net_bridge_resolved }}"

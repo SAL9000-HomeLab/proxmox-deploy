@@ -2,7 +2,7 @@
 - name: Render userdata locally (cloudbase for windows, cloud-init for linux)
   ansible.builtin.template:
     src: "{{ 'windows-cloudbase-init-userdata.j2' if cloud_type == 'windows' else 'linux-user-data.j2' }}"
-    dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
+    dest: "/tmp/proxmox_{{ vm_name }}_{{ vm_proxmox.vmid }}.userdata"
   delegate_to: localhost
   register: userdata_render
 
@@ -44,13 +44,12 @@
 - name: Copy userdata/snippet to node snippets dir (using resolved dir)
   ansible.builtin.copy:
     src: "{{ userdata_render.dest }}"
-    dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ( 'cloudbase-' if cloud_type == 'windows' else 'user-data-' ) ~ (desired_vmid | string) }}"
+    dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ( 'cloudbase-' if cloud_type == 'windows' else 'user-data-' ) ~ (vm_proxmox.vmid | string) }}"
     owner: root
     mode: '0600'
   delegate_to: "{{ node_name }}"
   become: true
   when: userdata_render is defined and userdata_render.dest is defined
-
 
 - name: Decide whether to update cicustom/ipconfig/DNS for VM
   set_fact:
@@ -60,31 +59,45 @@
     current_searchdomain: "{{ (qm_config.stdout | regex_search('searchdomain:.*', '\\0') ) | default('') }}"
   when: qm_config.stdout is defined
 
-- name: Build desired cicustom and ip/DNS strings (works for Linux & Windows)
+- name: Normalize guest cloud-init configuration
   set_fact:
-    desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
-    desired_ipconfig: >-
-      {% if vm_ip is defined and vm_ip | length > 0 %}
-      ip={{ vm_ip }}{% if vm_gateway is defined and vm_gateway | length > 0 %},gw={{ vm_gateway }}{% endif %}
-      {% else %}
-      ""
-      {% endif %}
-    desired_nameserver: >-
-      {% if vm_item.dns_servers is defined and vm_item.dns_servers %}
-      {{ (vm_item.dns_servers | join(' ')) }}
-      {% else %}""{% endif %}
-    desired_searchdomain: >-
-      {% if vm_item.search_domains is defined and vm_item.search_domains %}
-      {{ (vm_item.search_domains | join(' ')) }}
-      {% else %}""{% endif %}
+    vm_guest:
+      hostname: "{{ vm_name }}"
+      os_type: "{{ cloud_type }}"
+      userdata_file: >-
+        {{
+          'cloudbase-' ~ vm_proxmox.vmid
+          if cloud_type == 'windows'
+          else 'user-data-' ~ vm_proxmox.vmid
+        }}
+      cicustom: >-
+        user=local:snippets/{{
+          'cloudbase-' ~ vm_proxmox.vmid
+          if cloud_type == 'windows'
+          else 'user-data-' ~ vm_proxmox.vmid
+        }}
+      ipconfig: >-
+        {{
+          'ip=' ~ vm_network.cidr
+          ~ (
+            ',gw=' ~ vm_network.gateway
+            if vm_network.gateway | length > 0
+            else ''
+          )
+        }}
+      nameserver: "{{ vm_network.dns | join(' ') }}"
+      searchdomain: "{{ vm_item.search_domains | default([]) | join(' ') }}"
+
+
+
 
 - name: Build qm set argv (only include flags that have values)
   set_fact:
     qm_set_argv: >-
       {{
         [
-          'qm', 'set', (desired_vmid | string),
-          '--cicustom', desired_cicustom
+          'qm', 'set', (vm_proxmox.vmid | string),
+          '--cicustom', vm_guest.cicustom
         ]
         +
         (
@@ -118,8 +131,8 @@
       or 'set' in (qm_set_result.stdout | default('') | lower)
     )
   when: >
-    (current_cicustom != desired_cicustom)
-    or (vm_ip is defined and vm_ip | length > 0 and (current_ipconfig | default('')) != desired_ipconfig)
+    (current_cicustom != vm_guest.cicustom)
+    or (vm_ip is defined and vm_ip | length > 0 and (current_ipconfig | default('')) != vm_guest.ipconfig)
     or (vm_item.dns_servers is defined and vm_item.dns_servers and
         (current_nameserver | default('')) != ('nameserver: ' ~ (vm_item.dns_servers | join(' '))))
     or (vm_item.search_domains is defined and vm_item.search_domains and

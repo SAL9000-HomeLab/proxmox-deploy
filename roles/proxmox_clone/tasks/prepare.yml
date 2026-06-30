@@ -6,33 +6,64 @@
     proxmox_behavior_cb: "{{ proxmox_clone_behavior if (proxmox_clone_behavior is defined) else {} }}"
   run_once: false
 
-- name: Prepare VM variables (robust defaults, uses .get())
+- name: Normalize Proxmox configuration
   set_fact:
-    desired_vmid: >-
-      {{ vm_item.vmid if (vm_item.vmid is defined and vm_item.vmid) else (next_vmid | default(0)) }}
-    cloud_type: "{{ vm_item.os_type | default('linux') }}"
-    node_name: >-
-      {{ vm_item.node
-         | default( proxmox_cb.get('node') | default(proxmox_defaults_cb.get('node','pve01')) ) }}
-    storage_name: >-
-      {{ vm_item.storage
-         | default( proxmox_cb.get('storage') | default(proxmox_defaults_cb.get('storage','local')) ) }}
-    vm_name: "{{ vm_item.name }}"
-    disk_target: >-
-      {{ vm_item.disk_target
-         | default(
-           proxmox_behavior_cb.get('disk_target')
-           | default( proxmox_cb.get('disk_target') | default(proxmox_defaults_cb.get('disk_target','scsi0')) )
-         )
-      }}
-    use_full_clone: >-
-      {{ vm_item.full
-         | default(
-           proxmox_behavior_cb.get('full_clone')
-           | default( proxmox_cb.get('full_clone') | default(proxmox_defaults_cb.get('full_clone', true)) )
-         )
-      | bool }}
-  run_once: false
+    vm_proxmox:
+      vmid: >-
+        {{
+          vm_item.vmid
+          if (vm_item.vmid is defined and vm_item.vmid)
+          else next_vmid
+        }}
+
+      node: >-
+        {{
+          vm_item.node
+          | default(proxmox_cb.get('node'))
+          | default(proxmox_defaults_cb.get('node'))
+        }}
+
+      storage: >-
+        {{
+          vm_item.storage
+          | default(proxmox_cb.get('storage'))
+          | default(proxmox_defaults_cb.get('storage'))
+        }}
+
+      template_vmid: "{{ vm_item.template_vmid }}"
+
+      disk_target: >-
+        {{
+          vm_item.disk_target
+          | default(proxmox_cb.get('disk_target'))
+          | default(proxmox_defaults_cb.get('disk_target'))
+        }}
+
+      full_clone: >-
+        {{
+          vm_item.full
+          | default(proxmox_cb.get('full_clone'))
+          | default(proxmox_defaults_cb.get('full_clone'))
+          | bool
+        }}
+
+      cores: >-
+        {{
+          vm_item.cores
+          | default(proxmox_cb.get('cores'))
+          | default(proxmox_defaults_cb.get('cores'))
+        }}
+
+      memory: >-
+        {{
+          vm_item.memory
+          | default(proxmox_cb.get('memory'))
+          | default(proxmox_defaults_cb.get('memory'))
+        }}
+
+      bridge: "{{ vm_item.net_bridge | default(proxmox_cb.get('net_bridge')) }}"
+
+      vlan: "{{ vm_item.vlan | default(omit) }}"
 
 - name: Run qm list on node to discover existing VMs
   ansible.builtin.command:
@@ -44,7 +75,7 @@
 
 - name: Determine if target vmid exists on node
   set_fact:
-    target_exists: "{{ (qm_list_full.stdout_lines | select('match', '^\\s*' + (desired_vmid | string) + '\\s') | list) | length > 0 }}"
+    target_exists: "{{ (qm_list_full.stdout_lines | select('match', '^\\s*' + (vm_proxmox.vmid | string) + '\\s') | list) | length > 0 }}"
   run_once: false
 
 - name: Determine if template vmid exists on node
@@ -59,7 +90,7 @@
   delegate_to: "{{ node_name }}"
   become: true
 
-# --- Ensure we have a valid desired_vmid (auto-allocate if vm_item.vmid not set) ---
+# --- Ensure we have a valid vm_proxmox.vmid (auto-allocate if vm_item.vmid not set) ---
 - name: Lookup next available VMID on node (if needed)
   ansible.builtin.command:
     cmd: qm nextid
@@ -68,7 +99,7 @@
   register: qm_nextid_raw
   failed_when: false
   changed_when: false
-  when: desired_vmid | default(0) | int == 0
+  when: vm_proxmox.vmid | default(0) | int == 0
 
 - name: Set next_vmid from qm nextid output (or fallback)
   set_fact:
@@ -76,18 +107,18 @@
       {{ (qm_nextid_raw.stdout | default('') | regex_search('\\d+', '\\0') | default('')) | int
          if (qm_nextid_raw is defined and (qm_nextid_raw.stdout | default('') | length) > 0)
          else (next_vmid | default(100) | int) }}
-  when: desired_vmid | default(0) | int == 0
+  when: vm_proxmox.vmid | default(0) | int == 0
   run_once: false
 
-- name: Use auto-allocated next_vmid if desired_vmid was empty/zero
+- name: Use auto-allocated next_vmid if vm_proxmox.vmid was empty/zero
   set_fact:
-    desired_vmid: "{{ next_vmid | int }}"
-  when: desired_vmid | default(0) | int == 0
+    vm_proxmox.vmid: "{{ next_vmid | int }}"
+  when: vm_proxmox.vmid | default(0) | int == 0
   run_once: false
 
-- name: Assert desired_vmid is valid
+- name: Assert vm_proxmox.vmid is valid
   assert:
     that:
-      - desired_vmid is defined
-      - (desired_vmid | int) > 0
-    fail_msg: "desired_vmid is missing or invalid ({{ desired_vmid }}). qm nextid output: {{ qm_nextid_raw.stdout | default('') }}"
+      - vm_proxmox.vmid is defined
+      - (vm_proxmox.vmid | int) > 0
+    fail_msg: "vm_proxmox.vmid is missing or invalid ({{ vm_proxmox.vmid }}). qm nextid output: {{ qm_nextid_raw.stdout | default('') }}"

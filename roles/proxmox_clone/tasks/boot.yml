@@ -1,7 +1,7 @@
 ---
 - name: Start the VM (when newly cloned)
   ansible.builtin.command:
-    cmd: qm start {{ desired_vmid }}
+    cmd: qm start {{ vm_proxmox.vmid }}
   delegate_to: "{{ node_name }}"
   become: true
   register: qm_start
@@ -38,7 +38,7 @@
       rescue:
         - name: Warn that service check failed
           ansible.builtin.debug:
-            msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ desired_vmid }})."
+            msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ vm_proxmox.vmid }})."
   when: vm_ip is defined and vm_ip | length > 0
 
 # Bump next_vmid if auto-calculated

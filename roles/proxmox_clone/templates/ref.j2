@@ -1,6 +1,6 @@
 #cloud-config
 # Cloudbase-Init user-data for Windows
-# Rendered for: {{ vm_name }} (vmid {{ desired_vmid }})
+# Rendered for: {{ vm_name }} (vmid {{ vm_proxmox.vmid }})
 
 {% set _hostname = (vm_item.hostname if vm_item.hostname is defined and vm_item.hostname else (vm_name | default('winvm'))) %}
 set_hostname: "{{ _hostname }}"
