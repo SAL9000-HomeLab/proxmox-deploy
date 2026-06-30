@@ -609,7 +609,7 @@
 
     - name: Set allocated VM IP
       set_fact:
-        resolved_vm_ip: "{{ netbox_available_ip.json[0].address }}"
+        resolved_vm_ip: "{{ netbox_available_ip.json.address }}"
   when:
     - (vm_item.ip is not defined or vm_item.ip == "")
     - netbox_allocate_ip | default(true) | bool
