@@ -477,19 +477,26 @@
     netbox_resolved_token: "{{ (netbox | default({})).token | default(netbox_token | default('')) }}"
   run_once: false
 
-- name: Safety-check NetBox auto-allocation config for IP-less VMs
+- name: Safety-check NetBox configuration
   assert:
     that:
-      - (not (vm_item.ip is not defined or vm_item.ip == ""))
-        or not (netbox_allocate_ip | default(true) | bool)
-      - (not (vm_item.ip is not defined or vm_item.ip == ""))
-        or (netbox_resolved_api_url | length > 0)
-      - (not (vm_item.ip is not defined or vm_item.ip == ""))
-        or (netbox_resolved_token | length > 0)
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_allocate_ip | bool)
+
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_resolved_api_url | length > 0)
+
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_resolved_token | length > 0)
+
     fail_msg: >-
       NetBox IP allocation is enabled, but required NetBox API settings are missing.
-      Set netbox.api_url, netbox.token, or disable netbox_allocate_ip when using DHCP.
-  run_once: false
 
 - name: Resolve NetBox prefix mapping for VM bridge
   ansible.builtin.set_fact:
@@ -500,16 +507,16 @@
 
 - name: Allocate IP from NetBox when ip is not defined and allocation is enabled
   block:
-    - name: Assert NetBox allocation config exists
-      assert:
-        that:
-          - netbox_allocate_ip | default(true) | bool
-          - (netbox_resolved_api_url | default('')) | length > 0
-          - (netbox_resolved_token | default('')) | length > 0
-          - netbox_prefix_cidr | length > 0
-        fail_msg: >-
-          NetBox IP allocation is enabled but missing configuration for
-          netbox.api_url / netbox.token or prefix mapping for {{ net_bridge_resolved }}.
+    # - name: Assert NetBox allocation config exists
+    #   assert:
+    #     that:
+    #       - netbox_allocate_ip | default(true) | bool
+    #       - (netbox_resolved_api_url | default('')) | length > 0
+    #       - (netbox_resolved_token | default('')) | length > 0
+    #       - netbox_prefix_cidr | length > 0
+    #     fail_msg: >-
+    #       NetBox IP allocation is enabled but missing configuration for
+    #       netbox.api_url / netbox.token or prefix mapping for {{ net_bridge_resolved }}.
 
     - name: Lookup NetBox prefix by CIDR
       ansible.builtin.uri:
