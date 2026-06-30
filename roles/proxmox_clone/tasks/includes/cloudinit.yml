@@ -38,7 +38,7 @@
     owner: root
     group: root
     mode: '0755'
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
 
 - name: Copy userdata/snippet to node snippets dir (using resolved dir)
@@ -47,7 +47,7 @@
     dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ( 'cloudbase-' if cloud_type == 'windows' else 'user-data-' ) ~ (vm_proxmox.vmid | string) }}"
     owner: root
     mode: '0600'
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   when: userdata_render is defined and userdata_render.dest is defined
 
@@ -122,7 +122,7 @@
 - name: QM set - update cicustom/ipconfig/DNS only if different
   ansible.builtin.command:
     argv: "{{ qm_set_argv }}"
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_set_result
   changed_when: >

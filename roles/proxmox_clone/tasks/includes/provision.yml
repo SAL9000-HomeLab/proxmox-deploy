@@ -7,7 +7,7 @@
           qm clone {{ vm_proxmox.template_vmid }}
           {{ vm_proxmox.vmid }}
           --storage {{ vm_proxmox.storage }}
-      delegate_to: "{{ node_name }}"
+      delegate_to: "{{ vm_proxmox.node }}"
       become: true
       register: qm_clone_full
       changed_when: qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower) or 'created' in (qm_clone_full.stdout | lower))
@@ -21,7 +21,7 @@
         cmd: >-
           qm clone {{ vm_proxmox.template_vmid }} {{ vm_proxmox.vmid }}
           --name {{ vm_name }}
-      delegate_to: "{{ node_name }}"
+      delegate_to: "{{ vm_proxmox.node }}"
       become: true
       register: qm_clone_linked
       changed_when: qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower) or 'created' in (qm_clone_linked.stdout | lower))
@@ -35,7 +35,7 @@
 - name: Gather VM config after ensure (qm config)
   ansible.builtin.command:
     cmd: qm config {{ vm_proxmox.vmid }}
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_config
   failed_when: false
@@ -88,7 +88,7 @@
 - name: Apply cores/memory changes via qm set (only when flags present)
   ansible.builtin.command:
     argv: "{{ qm_set_cfg_argv }}"
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_set_cfg_result
   # Mark changed when the command ran successfully (rc == 0).
@@ -125,14 +125,14 @@
       - "{{ vm_proxmox.vmid }}"
       - --net0
       - "{{ net0_config | regex_replace('\\s+', '') }}"
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   register: net_config_result
   changed_when: net_config_result.rc == 0
 
 - name: Set Proxmox VM tags (if defined)
   ansible.builtin.command:
     cmd: qm set {{ vm_proxmox.vmid }} --tags {{ vm_proxmox.tags }}
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   when: vm_proxmox.tags is defined
 
@@ -141,11 +141,11 @@
 - name: Parse current bootdisk raw/fallback lists from qm config (safe)
   set_fact:
     current_disk_size_raw_list: >-
-      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*size=([^,\\n\\s]+)') }}
+      {{ (qm_config.stdout | default('')) | regex_findall(vm_proxmox.disk_target ~ ':[^\\n]*size=([^,\\n\\s]+)') }}
     current_disk_size_fallback_list: >-
-      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*,([^,\\n\\s]*G)') }}
+      {{ (qm_config.stdout | default('')) | regex_findall(vm_proxmox.disk_target ~ ':[^\\n]*,([^,\\n\\s]*G)') }}
   vars:
-    disk_target: "{{ disk_target }}"
+    vm_proxmox.disk_target: "{{ vm_proxmox.disk_target }}"
   run_once: false
 
 - name: Pick first parsed disk size raw & fallback into simple vars
@@ -191,12 +191,12 @@
          | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
   run_once: false
 
-- name: Resolve disk_target_resolved (vm_item -> explicit disk_target -> parse qm_config -> default scsi0)
+- name: Resolve vm_proxmox.disk_target_resolved (vm_item -> explicit vm_proxmox.disk_target -> parse qm_config -> default scsi0)
   set_fact:
-    disk_target_resolved: >-
+    vm_proxmox.disk_target_resolved: >-
       {{
-        (vm_proxmox.disk_target | default(''))
-        | default( (disk_target | default('')) )
+        (vm_proxmox.vm_proxmox.disk_target | default(''))
+        | default( (vm_proxmox.disk_target | default('')) )
         | default( (_qm_disk_keys | first) | default('scsi0') )
       }}
   run_once: false
@@ -205,22 +205,22 @@
   debug:
     msg:
       vmid: "{{ vm_proxmox.vmid }}"
-      vm_item_disk_target: "{{ vm_proxmox.disk_target | default('UNSET') }}"
-      disk_target_from_vars: "{{ disk_target | default('UNSET') }}"
+      vm_item_vm_proxmox.disk_target: "{{ vm_proxmox.vm_proxmox.disk_target | default('UNSET') }}"
+      vm_proxmox.disk_target_from_vars: "{{ vm_proxmox.disk_target | default('UNSET') }}"
       parsed_disk_keys: "{{ _qm_disk_keys }}"
-      disk_target_resolved: "{{ disk_target_resolved }}"
+      vm_proxmox.disk_target_resolved: "{{ vm_proxmox.disk_target_resolved }}"
       vm_item_disk_size: "{{ vm_proxmox.disk_size | default('UNSET') }}"
       target_exists: "{{ target_exists | default('undef') }}"
   run_once: false
 
-- name: Ensure disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
+- name: Ensure vm_proxmox.disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
   set_fact:
     _qm_disk_keys: >-
       {{ (qm_config.stdout | default('')) | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
-    disk_target_resolved: >-
+    vm_proxmox.disk_target_resolved: >-
       {{
-        (vm_proxmox.disk_target | default(''))
-        | default( disk_target | default(proxmox_defaults.disk_target | default('')) )
+        (vm_proxmox.vm_proxmox.disk_target | default(''))
+        | default( vm_proxmox.disk_target | default(proxmox_defaults.vm_proxmox.disk_target | default('')) )
         | default( (_qm_disk_keys | first) | default('scsi0') )
       }}
   run_once: false
@@ -228,8 +228,8 @@
 - name: Try qm disk resize (preferred syntax)
   ansible.builtin.command:
     cmd: >-
-      qm disk resize {{ vm_proxmox.vmid }} {{ disk_target_resolved }} {{ vm_proxmox.disk_size }}
-  delegate_to: "{{ node_name }}"
+      qm disk resize {{ vm_proxmox.vmid }} {{ vm_proxmox.disk_target_resolved }} {{ vm_proxmox.disk_size }}
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_resize_try1
   failed_when: false
@@ -256,8 +256,8 @@
 - name: Try legacy qm resize if first attempt failed with argument errors
   ansible.builtin.command:
     cmd: >-
-      qm resize {{ vm_proxmox.vmid }} {{ disk_target_resolved }} {{ vm_proxmox.disk_size }}
-  delegate_to: "{{ node_name }}"
+      qm resize {{ vm_proxmox.vmid }} {{ vm_proxmox.disk_target_resolved }} {{ vm_proxmox.disk_size }}
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_resize_try2
   failed_when: false
@@ -285,7 +285,7 @@
 - name: Determine final resize status and fail if both attempts failed (safe checks)
   fail:
     msg: |
-      Both resize attempts failed for VM {{ vm_proxmox.vmid }} disk {{ disk_target_resolved | default('NONE') }} -> {{ vm_proxmox.disk_size }}.
+      Both resize attempts failed for VM {{ vm_proxmox.vmid }} disk {{ vm_proxmox.disk_target_resolved | default('NONE') }} -> {{ vm_proxmox.disk_size }}.
       try1 rc={{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined) else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and (qm_resize_try1.results|length) > 0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
       try1 stdout={{ (qm_resize_try1.stdout | default('')) }}
       try1 stderr={{ (qm_resize_try1.stderr | default('')) }}

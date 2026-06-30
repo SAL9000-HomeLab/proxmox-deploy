@@ -28,7 +28,7 @@
 
 - name: Resolve VM bridge
   ansible.builtin.set_fact:
-    net_bridge_resolved: >-
+    net_vm_proxmox.bridge: >-
       {{
         vm_item.net_bridge
         | default(
@@ -39,11 +39,11 @@
 
 - name: Resolve NetBox IP range
   set_fact:
-    netbox_ip_range_id: "{{ ip_ranges_by_bridge[net_bridge_resolved] }}"
+    netbox_ip_range_id: "{{ ip_ranges_by_bridge[net_vm_proxmox.bridge] }}"
 
 - name: Resolve NetBox prefix mapping
   ansible.builtin.set_fact:
-    netbox_gateway_cidr: "{{ gateway_by_bridge[net_bridge_resolved] | default('') }}"
+    netbox_gateway_cidr: "{{ gateway_by_bridge[net_vm_proxmox.bridge] | default('') }}"
 
 - name: Allocate IP from NetBox when ip is not defined and allocation is enabled
   block:
@@ -102,7 +102,7 @@
     vm_gateway: >-
       {{ vm_item.gateway
          if (vm_item.gateway is defined and vm_item.gateway | length > 0)
-         else (gateway_by_bridge[net_bridge_resolved] | default('')) }}
+         else (gateway_by_bridge[net_vm_proxmox.bridge] | default('')) }}
   run_once: false
 
 - name: Normalize networking
@@ -112,4 +112,4 @@
       cidr: "{{ vm_ip }}"
       gateway: "{{ vm_gateway }}"
       dns: "{{ vm_item.dns_servers | default([]) }}"
-      bridge: "{{ net_bridge_resolved }}"
+      bridge: "{{ net_vm_proxmox.bridge }}"

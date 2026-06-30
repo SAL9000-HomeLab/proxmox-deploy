@@ -11,7 +11,7 @@ provision_vms:
     template_vmid: 9001
     node: pve01.lab.sal9000.tech
     vmid: 3026
-    disk_target: scsi0
+    vm_proxmox.disk_target: scsi0
     os_type: windows
     net_bridge: vnet30
     ip: 10.100.30.12/24

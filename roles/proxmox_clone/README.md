@@ -16,7 +16,7 @@ Usage:
 Variable reference:
 - `provision_vms`: list of VM objects.
   - `name`, `template_vmid`, `vmid` (optional), `node` (optional), `os_type` (`linux` or `windows`).
-  - `net_bridge`, `net_model`, `vlan`, `disk_target`, `cores`, `memory`, `disk_size`, `tags`.
+  - `net_bridge`, `net_model`, `vlan`, `vm_proxmox.disk_target`, `cores`, `memory`, `disk_size`, `tags`.
   - `ip`, `gateway`, `dns_servers`, `search_domains`, `hostname`, `ssh_authorized_keys`, `winrm_ssl`.
   - `full` for full clone behavior; `cloudinit_userdata` for template context overrides.
 - `proxmox`: role-level defaults.
@@ -35,7 +35,7 @@ provision_vms:
     template_vmid: 9001
     node: pve01.lab.sal9000.tech
     vmid: 3026
-    disk_target: scsi0
+    vm_proxmox.disk_target: scsi0
     os_type: windows
     net_bridge: vlan30
     ip: 10.100.30.12/24

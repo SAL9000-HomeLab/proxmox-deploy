@@ -32,11 +32,11 @@
 
       template_vmid: "{{ vm_item.template_vmid }}"
 
-      disk_target: >-
+      vm_proxmox.disk_target: >-
         {{
-          vm_item.disk_target
-          | default(proxmox_cb.get('disk_target'))
-          | default(proxmox_defaults_cb.get('disk_target'))
+          vm_item.vm_proxmox.disk_target
+          | default(proxmox_cb.get('vm_proxmox.disk_target'))
+          | default(proxmox_defaults_cb.get('vm_proxmox.disk_target'))
         }}
 
       full_clone: >-
@@ -68,7 +68,7 @@
 - name: Run qm list on node to discover existing VMs
   ansible.builtin.command:
     cmd: qm list
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_list_full
   changed_when: false
@@ -85,16 +85,16 @@
 
 - name: Fail if template not present on node
   fail:
-    msg: "Template vmid {{ vm_item.template_vmid }} not found on node {{ node_name }}. qm list: {{ qm_list_full.stdout_lines | join('\\n') }}"
+    msg: "Template vmid {{ vm_item.template_vmid }} not found on node {{ vm_proxmox.node }}. qm list: {{ qm_list_full.stdout_lines | join('\\n') }}"
   when: not template_exists
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
 
 # --- Ensure we have a valid vm_proxmox.vmid (auto-allocate if vm_item.vmid not set) ---
 - name: Lookup next available VMID on node (if needed)
   ansible.builtin.command:
     cmd: qm nextid
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_nextid_raw
   failed_when: false

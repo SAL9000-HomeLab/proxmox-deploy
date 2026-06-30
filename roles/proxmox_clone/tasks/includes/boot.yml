@@ -2,7 +2,7 @@
 - name: Start the VM (when newly cloned)
   ansible.builtin.command:
     cmd: qm start {{ vm_proxmox.vmid }}
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ vm_proxmox.node }}"
   become: true
   register: qm_start
   changed_when: "'status' in (qm_start.stdout | default('')) or qm_start.rc == 0"
