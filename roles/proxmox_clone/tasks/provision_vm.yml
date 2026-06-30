@@ -498,12 +498,28 @@
     fail_msg: >-
       NetBox IP allocation is enabled, but required NetBox API settings are missing.
 
-- name: Resolve NetBox prefix mapping for VM bridge
+# - name: Resolve NetBox prefix mapping for VM bridge
+#   ansible.builtin.set_fact:
+#     net_bridge_resolved: "{{ vm_item.net_bridge | default(proxmox_cb.get('net_bridge') | default(proxmox_defaults_cb.get('net_bridge'))) }}"
+#     netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
+#     netbox_gateway_cidr: "{{ netbox_gateway_by_bridge[net_bridge_resolved] | default('') }}"
+#   run_once: false
+
+- name: Resolve VM bridge
   ansible.builtin.set_fact:
-    net_bridge_resolved: "{{ vm_item.net_bridge | default(proxmox_cb.get('net_bridge') | default(proxmox_defaults_cb.get('net_bridge'))) }}"
+    net_bridge_resolved: >-
+      {{
+        vm_item.net_bridge
+        | default(
+            proxmox_cb.get('net_bridge')
+            | default(proxmox_defaults_cb.get('net_bridge'))
+          )
+      }}
+
+- name: Resolve NetBox prefix mapping
+  ansible.builtin.set_fact:
     netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
     netbox_gateway_cidr: "{{ netbox_gateway_by_bridge[net_bridge_resolved] | default('') }}"
-  run_once: false
 
 - name: Allocate IP from NetBox when ip is not defined and allocation is enabled
   block:
