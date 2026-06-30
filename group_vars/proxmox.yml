@@ -20,6 +20,11 @@ proxmox:
 
 netbox_allocate_ip: true
 netbox_prefixes_by_bridge:
+  vnet20: 10.100.20.0/24
+  vnet30: 10.100.30.0/24
+  vnet40: 10.100.40.0/24
+  vnet150: 10.100.150.0/24
+netbox_ip_ranges_by_bridge:
   vnet20: 3
   vnet30: 19
   vnet40: 20

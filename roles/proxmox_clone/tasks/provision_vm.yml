@@ -516,6 +516,10 @@
           )
       }}
 
+- name: Resolve NetBox IP range
+  set_fact:
+    netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] }}"
+
 - name: Resolve NetBox prefix mapping
   ansible.builtin.set_fact:
     netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
@@ -545,15 +549,15 @@
     #   register: netbox_prefix_search
     #   failed_when: netbox_prefix_search.status != 200
 
-    - name: Assert NetBox prefix exists for {{ netbox_prefix_cidr }}
-      assert:
-        that:
-          - netbox_prefix_search.json.count | int > 0
-        fail_msg: "No NetBox prefix found for {{ netbox_prefix_cidr }}"
+    # - name: Assert NetBox prefix exists for {{ netbox_prefix_cidr }}
+    #   assert:
+    #     that:
+    #       - netbox_prefix_search.json.count | int > 0
+    #     fail_msg: "No NetBox prefix found for {{ netbox_prefix_cidr }}"
 
-    - name: Set NetBox prefix id
-      set_fact:
-        netbox_prefix_id: "{{ netbox_prefix_search.json.results[0].id }}"
+    # - name: Set NetBox prefix id
+    #   set_fact:
+    #     netbox_prefix_id: "{{ netbox_prefix_search.json.results[0].id }}"
 
     # - name: Query NetBox for an available IP in the prefix
     #   ansible.builtin.uri:
@@ -588,12 +592,11 @@
     - name: Assert NetBox returned an available IP
       assert:
         that:
-          - netbox_available_ip.json.results | length > 0
-        fail_msg: "NetBox returned no available IP addresses for prefix {{ netbox_prefix_cidr }}"
+          - netbox_available_ip.json | length > 0
 
-    - name: Set allocated VM IP from NetBox
+    - name: Set allocated VM IP
       set_fact:
-        resolved_vm_ip: "{{ netbox_available_ip.json.address }}"
+        resolved_vm_ip: "{{ netbox_available_ip.json[0].address }}"
   when:
     - (vm_item.ip is not defined or vm_item.ip == "")
     - netbox_allocate_ip | default(true) | bool
