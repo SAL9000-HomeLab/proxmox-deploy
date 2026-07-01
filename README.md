@@ -11,6 +11,7 @@ Example AWX extra vars:
 ```yaml
 provision_vms:
   - name: W25C-TEST001
+    description: "test vm deployment"
     domain: "lab.sal9000.tech"
     template_vmid: 9001
     node: pve01.lab.sal9000.tech
