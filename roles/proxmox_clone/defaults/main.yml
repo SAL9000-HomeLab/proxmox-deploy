@@ -33,7 +33,7 @@ provision_vms: []
 #   node: pve01.lab.sal9000.tech
 #   os_type: linux
 #   description: "Internal web server for team X"
-#   dns_name: "web-01.example.com"  # only applied when NetBox allocates the IP
+#   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP
 #   cores: 2
 #   memory: 2048
 #   disk_size: 20G

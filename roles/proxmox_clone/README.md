@@ -20,7 +20,7 @@ Variable reference:
   - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects a bare IP), `gateway`, `dns_servers`, `search_domains`, `hostname`, `ssh_authorized_keys`, `winrm_ssl`.
   - `full` for full clone behavior; `cloudinit_userdata` for template context overrides.
   - `description`: free-text note. Set as the VM's Notes field in Proxmox (`qm set --description`), and — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the `description` on that NetBox IP address reservation.
-  - `dns_name`: only used when NetBox allocates the IP (i.e. `ip` isn't supplied) — set as the `dns_name` on that NetBox IP address reservation.
+  - `domain`: only used when NetBox allocates the IP (i.e. `ip` isn't supplied) — combined with `name` as `<name>.<domain>` and set as the `dns_name` on that NetBox IP address reservation.
 - `proxmox`: role-level defaults.
   - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `timeout`, `cpu`, `memory`.
 - NetBox auto-allocation variables.
@@ -33,14 +33,14 @@ Variable reference:
 AWX example:
 ```yaml
 provision_vms:
-  - name: W25C-LABDC006
+  - name: W25C-TEST001
     template_vmid: 9001
     node: pve01.lab.sal9000.tech
     vmid: 3026
     disk_target: scsi0
     os_type: windows
     net_bridge: vlan30
-    ip: 10.100.30.12/24
+    ip: 10.100.30.25/24
     gateway: 10.100.30.1
     dns_servers:
       - 10.100.30.101

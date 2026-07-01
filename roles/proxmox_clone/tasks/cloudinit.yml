@@ -98,7 +98,7 @@
           {{
             {}
             | combine({'description': vm_item.description} if vm_item.description is defined else {})
-            | combine({'dns_name': vm_item.dns_name} if vm_item.dns_name is defined else {})
+            | combine({'dns_name': (vm_item.name ~ '.' ~ vm_item.domain)} if vm_item.domain is defined else {})
           }}
 
     - name: Allocate next IP from NetBox range
