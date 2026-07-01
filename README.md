@@ -1,6 +1,9 @@
 # deploy-template
 
-This repository deploys Windows VMs to a Proxmox cluster using SSH and `qm`.
+This repository deploys VMs (Linux or Windows) to a Proxmox cluster by cloning a template over
+SSH (`qm`), optionally reserving an IP from NetBox, and applying cloud-init/cloudbase-init. All
+of the actual logic lives in the `proxmox_clone` role — see
+[roles/proxmox_clone/README.md](roles/proxmox_clone/README.md) for the full variable reference.
 
 Use `site.yml` from AWX and pass VM definitions through job extra vars.
 
@@ -32,4 +35,8 @@ proxmox:
   net_bridge: vnet30
 ```
 
-If you need credential files in AWX, set `proxmox_creds_file` and/or `domain_join_file` as extra vars.
+Windows VMs also require the domain-join variables (`domain_name`, `domain_join_ou`,
+`domain_admin_group`, `domain_join_user`, `domain_join_pass`) to be supplied as extra vars —
+`site.yml` doesn't load a credentials file for these today, so they need to come from an AWX
+credential injected into the job (or `-e` on the CLI). `domain_name`, `domain_join_ou`, and
+`domain_admin_group` currently default from `group_vars/all.yml`.

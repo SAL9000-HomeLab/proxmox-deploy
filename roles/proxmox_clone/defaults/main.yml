@@ -45,4 +45,3 @@ provision_vms: []
 #     - example.com
 #   ssh_authorized_keys:
 #     - "ssh-rsa AAAA... user@example"
-#   cloudinit_userdata: {}  # optional additions to the jinja template context
