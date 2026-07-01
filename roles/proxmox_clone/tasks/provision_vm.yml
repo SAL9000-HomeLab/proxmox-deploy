@@ -290,9 +290,13 @@
 
 # --- robust resize block -----------------------------------------------------
 
-- name: Ensure disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
+- name: Discover candidate disk keys from qm config
   set_fact:
     _qm_disk_keys: "{{ (qm_config.stdout | default('')) | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}"
+  run_once: false
+
+- name: Ensure disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
+  set_fact:
     disk_target_resolved: >-
       {{
         (vm_item.disk_target | default(''))
