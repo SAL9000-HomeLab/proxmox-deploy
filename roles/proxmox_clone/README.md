@@ -17,7 +17,7 @@ Variable reference:
 - `provision_vms`: list of VM objects.
   - `name`, `template_vmid`, `vmid` (optional), `node` (optional), `os_type` (`linux` or `windows`).
   - `net_bridge`, `net_model`, `vlan`, `disk_target`, `cores`, `memory`, `disk_size`, `tags`.
-  - `ip`, `gateway`, `dns_servers`, `search_domains`, `hostname`, `ssh_authorized_keys`, `winrm_ssl`.
+  - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects a bare IP), `gateway`, `dns_servers`, `search_domains`, `hostname`, `ssh_authorized_keys`, `winrm_ssl`.
   - `full` for full clone behavior; `cloudinit_userdata` for template context overrides.
 - `proxmox`: role-level defaults.
   - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `timeout`, `cpu`, `memory`.

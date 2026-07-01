@@ -130,6 +130,14 @@
          else (netbox_gateway_by_bridge[net_bridge_resolved] | default('')) }}
   run_once: false
 
+- name: Validate vm_ip includes a CIDR prefix (required by Proxmox ipconfig0)
+  assert:
+    that:
+      - (vm_ip | length == 0) or ('/' in vm_ip)
+    fail_msg: >-
+      vm_item.ip must include a CIDR prefix length, e.g. "10.100.30.25/24" — got "{{ vm_ip }}".
+  when: vm_ip is defined
+
 - name: Decide whether to update cicustom/ipconfig/DNS for VM
   set_fact:
     current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*') ) | default('') }}"
