@@ -121,6 +121,26 @@
     - vm_item.tags is defined
     - current_tags != desired_tags
 
+- name: Parse current description/notes from qm config
+  set_fact:
+    current_description: "{{ (qm_config.stdout | default('')) | regex_search('(?<=description: ).*') | default('') }}"
+
+- name: Set Proxmox VM description/notes (if defined and different)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ desired_vmid }}"
+      - --description
+      - "{{ vm_item.description }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: description_result
+  changed_when: description_result.rc == 0
+  when:
+    - vm_item.description is defined
+    - current_description != vm_item.description
+
 # --- disk size parsing -------------------------------------------------------
 
 - name: Parse current bootdisk raw/fallback lists from qm config (safe)

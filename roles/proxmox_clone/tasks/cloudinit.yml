@@ -101,7 +101,7 @@
           Authorization: "Token {{ netbox_resolved_token }}"
           Accept: application/json
         body_format: json
-        body: {}
+        body: "{{ {'description': vm_item.description} if vm_item.description is defined else {} }}"
         status_code: 201
       register: netbox_available_ip
 

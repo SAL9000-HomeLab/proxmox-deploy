@@ -19,6 +19,7 @@ Variable reference:
   - `net_bridge`, `net_model`, `vlan`, `disk_target`, `cores`, `memory`, `disk_size`, `tags`.
   - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects a bare IP), `gateway`, `dns_servers`, `search_domains`, `hostname`, `ssh_authorized_keys`, `winrm_ssl`.
   - `full` for full clone behavior; `cloudinit_userdata` for template context overrides.
+  - `description`: free-text note. Set as the VM's Notes field in Proxmox (`qm set --description`), and — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the `description` on that NetBox IP address reservation.
 - `proxmox`: role-level defaults.
   - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `timeout`, `cpu`, `memory`.
 - NetBox auto-allocation variables.
