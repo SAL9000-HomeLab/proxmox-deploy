@@ -34,26 +34,28 @@ AWX example:
 ```yaml
 provision_vms:
   - name: W25C-TEST001
+    domain: "lab.sal9000.tech"
     template_vmid: 9001
     node: pve01.lab.sal9000.tech
-    vmid: 3026
+    vmid: 3021
     disk_target: scsi0
     os_type: windows
-    net_bridge: vlan30
-    ip: 10.100.30.25/24
-    gateway: 10.100.30.1
+    net_bridge: vnet30
+    # ip: 10.100.30.25/24
+    # gateway: 10.100.30.1
     dns_servers:
       - 10.100.30.101
       - 10.100.30.111
     search_domains:
       - lab.sal9000.tech
+      - ds.sal9000.tech
     cores: 4
     memory: 8192
     disk_size: 100G
     tags: "windows,2025,core"
 proxmox:
   storage: nfs_ssd
-  net_bridge: vmbr0
+  net_bridge: vnet30
 ```
 ```yaml
 - hosts: proxmox
