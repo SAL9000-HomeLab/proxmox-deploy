@@ -1,0 +1,222 @@
+---
+# roles/proxmox_clone/tasks/cloudinit.yml
+# Render and upload the cloud-init/cloudbase-init snippet, allocate an IP from
+# NetBox if one wasn't supplied, and reconcile cicustom/ipconfig/DNS.
+# Expects vm_item loop variable and facts from resolve_vars.yml / clone.yml / configure.yml.
+
+- name: Render userdata locally (cloudbase for windows, cloud-init for linux)
+  ansible.builtin.template:
+    src: "{{ 'windows-cloudbase-init-userdata.j2' if cloud_type == 'windows' else 'linux-user-data.j2' }}"
+    dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
+  delegate_to: localhost
+  register: userdata_render
+
+- name: Resolve raw snippets dir from variables (safe)
+  set_fact:
+    _proxmox_snippets_raw: >-
+      {{ (
+           (proxmox.snippets_dir if (proxmox is defined and proxmox is mapping and 'snippets_dir' in proxmox) else
+            (proxmox_defaults.snippets_dir if (proxmox_defaults is defined and proxmox_defaults is mapping and 'snippets_dir' in proxmox_defaults) else
+             '/var/lib/vz/snippets'
+            )
+           )
+         ) }}
+  run_once: false
+
+- name: Normalize snippets_dir_resolved (force leading slash, collapse doubles)
+  set_fact:
+    snippets_dir_resolved: >-
+      {{ ('/' ~ (_proxmox_snippets_raw | default('var/lib/vz/snippets'))) | regex_replace('/+','/') }}
+  run_once: false
+
+- name: Ensure snippets directory exists on node (create if missing)
+  ansible.builtin.file:
+    path: "{{ snippets_dir_resolved }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  delegate_to: "{{ node_name }}"
+  become: true
+
+- name: Copy userdata/snippet to node snippets dir (using resolved dir)
+  ansible.builtin.copy:
+    src: "{{ userdata_render.dest }}"
+    dest: "{{ (snippets_dir_resolved | regex_replace('/$','')) ~ '/' ~ ( 'cloudbase-' if cloud_type == 'windows' else 'user-data-' ) ~ (desired_vmid | string) }}"
+    owner: root
+    mode: '0600'
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: userdata_render is defined and userdata_render.dest is defined
+
+- name: Resolve NetBox credential variables for this host
+  set_fact:
+    netbox_resolved_api_url: "{{ (netbox | default({})).api_url | default(netbox_api_url | default('')) }}"
+    netbox_resolved_token: "{{ (netbox | default({})).token | default(netbox_token | default('')) }}"
+  run_once: false
+
+- name: Safety-check NetBox configuration
+  assert:
+    that:
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_allocate_ip | bool)
+
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_resolved_api_url | length > 0)
+
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_resolved_token | length > 0)
+
+    fail_msg: >-
+      NetBox IP allocation is enabled, but required NetBox API settings are missing.
+
+- name: Resolve NetBox IP range
+  set_fact:
+    netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] }}"
+
+- name: Allocate IP from NetBox when ip is not defined and allocation is enabled
+  block:
+    - name: Lookup IP range
+      uri:
+        url: >-
+          {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/
+        method: GET
+        headers:
+          Authorization: "Bearer {{ netbox_resolved_token }}"
+          Accept: application/json
+      register: netbox_ip_range
+
+    - name: Build NetBox IP reservation body (description/dns_name, only if provided)
+      set_fact:
+        netbox_ip_body: >-
+          {{
+            {}
+            | combine({'description': vm_item.description} if vm_item.description is defined else {})
+            | combine({'dns_name': (vm_item.name ~ '.' ~ vm_item.domain)} if vm_item.domain is defined else {})
+          }}
+
+    - name: Allocate next IP from NetBox range
+      uri:
+        url: >-
+          {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/available-ips/
+        method: POST
+        headers:
+          Authorization: "Token {{ netbox_resolved_token }}"
+          Accept: application/json
+        body_format: json
+        body: "{{ netbox_ip_body }}"
+        status_code: 201
+      register: netbox_available_ip
+
+    - name: Assert NetBox returned an available IP
+      assert:
+        that:
+          - netbox_available_ip.json | length > 0
+
+    - name: Set allocated VM IP
+      set_fact:
+        resolved_vm_ip: "{{ netbox_available_ip.json.address }}"
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - netbox_allocate_ip | default(true) | bool
+  run_once: false
+
+- name: Set final VM IP and gateway variables for later configuration
+  set_fact:
+    vm_ip: >-
+      {{ vm_item.ip
+         if (vm_item.ip is defined and vm_item.ip | length > 0)
+         else (resolved_vm_ip | default('')) }}
+    vm_gateway: >-
+      {{ vm_item.gateway
+         if (vm_item.gateway is defined and vm_item.gateway | length > 0)
+         else (netbox_gateway_by_bridge[net_bridge_resolved] | default('')) }}
+  run_once: false
+
+- name: Validate vm_ip includes a CIDR prefix (required by Proxmox ipconfig0)
+  assert:
+    that:
+      - (vm_ip | length == 0) or ('/' in vm_ip)
+    fail_msg: >-
+      vm_item.ip must include a CIDR prefix length, e.g. "10.100.30.25/24" — got "{{ vm_ip }}".
+  when: vm_ip is defined
+
+- name: Decide whether to update cicustom/ipconfig/DNS for VM
+  set_fact:
+    current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*') ) | default('') }}"
+    current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*') ) | default('') }}"
+    current_nameserver: "{{ (qm_config.stdout | regex_search('nameserver:.*') ) | default('') }}"
+    current_searchdomain: "{{ (qm_config.stdout | regex_search('searchdomain:.*') ) | default('') }}"
+  when: qm_config.stdout is defined
+
+- name: Build desired cicustom and ip/DNS strings (works for Linux & Windows)
+  set_fact:
+    desired_cicustom: "user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}"
+    desired_ipconfig: >-
+      {% if vm_ip is defined and vm_ip | length > 0 %}
+      ip={{ vm_ip }}{% if vm_gateway is defined and vm_gateway | length > 0 %},gw={{ vm_gateway }}{% endif %}
+      {% else %}
+      ""
+      {% endif %}
+    desired_nameserver: >-
+      {% if vm_item.dns_servers is defined and vm_item.dns_servers %}
+      {{ (vm_item.dns_servers | join(' ')) }}
+      {% else %}""{% endif %}
+    desired_searchdomain: >-
+      {% if vm_item.search_domains is defined and vm_item.search_domains %}
+      {{ (vm_item.search_domains | join(' ')) }}
+      {% else %}""{% endif %}
+
+- name: Build qm set argv (only include flags that have values)
+  set_fact:
+    qm_set_argv: >-
+      {{
+        [
+          'qm', 'set', (desired_vmid | string),
+          '--cicustom', desired_cicustom
+        ]
+        +
+        (
+          ['--ipconfig0',
+           'ip=' ~ vm_ip ~ (
+             (vm_gateway is defined and vm_gateway | length > 0) and (',gw=' ~ vm_gateway) or ''
+           )
+          ] if (vm_ip is defined and vm_ip | length > 0) else []
+        )
+        +
+        (
+          ['--nameserver', (vm_item.dns_servers | join(' '))]
+          if (vm_item.dns_servers is defined and (vm_item.dns_servers | length) > 0) else []
+        )
+        +
+        (
+          ['--searchdomain', (vm_item.search_domains | join(' '))]
+          if (vm_item.search_domains is defined and (vm_item.search_domains | length) > 0) else []
+        )
+      }}
+
+- name: QM set - update cicustom/ipconfig/DNS only if different
+  ansible.builtin.command:
+    argv: "{{ qm_set_argv }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_result
+  changed_when: >
+    qm_set_result.rc == 0 and (
+      'updated' in (qm_set_result.stdout | default('') | lower)
+      or 'set' in (qm_set_result.stdout | default('') | lower)
+    )
+  when: >
+    (current_cicustom != desired_cicustom)
+    or (vm_ip is defined and vm_ip | length > 0 and (current_ipconfig | default('')) != desired_ipconfig)
+    or (vm_item.dns_servers is defined and vm_item.dns_servers and
+        (current_nameserver | default('')) != ('nameserver: ' ~ (vm_item.dns_servers | join(' '))))
+    or (vm_item.search_domains is defined and vm_item.search_domains and
+        (current_searchdomain | default('')) != ('searchdomain: ' ~ (vm_item.search_domains | join(' '))))
+  failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )

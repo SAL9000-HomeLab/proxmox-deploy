@@ -1,0 +1,48 @@
+---
+# roles/proxmox_clone/tasks/clone.yml
+# Clone the template into the target vmid (if it doesn't already exist) and
+# gather its resulting qm config for the configure/cloudinit steps.
+# Expects vm_item loop variable and facts from resolve_vars.yml.
+
+- name: Clone template into new VMID (when not exists) using qm (full vs linked)
+  block:
+    - name: Clone (full clone path)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+          --full
+          --storage {{ storage_name }}
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: qm_clone_full
+      changed_when: qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower) or 'created' in (qm_clone_full.stdout | lower))
+      failed_when: qm_clone_full.rc != 0 and ('already exists' not in (qm_clone_full.stderr | default('')) )
+      when:
+        - not target_exists
+        - use_full_clone | bool
+
+    - name: Clone (linked clone path — no --storage)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: qm_clone_linked
+      changed_when: qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower) or 'created' in (qm_clone_linked.stdout | lower))
+      failed_when: qm_clone_linked.rc != 0 and ('already exists' not in (qm_clone_linked.stderr | default('')) )
+      when:
+        - not target_exists
+        - not (use_full_clone | bool)
+
+  when: not target_exists
+
+- name: Gather VM config after ensure (qm config)
+  ansible.builtin.command:
+    cmd: qm config {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_config
+  failed_when: false
+  changed_when: false

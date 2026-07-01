@@ -32,6 +32,8 @@ provision_vms: []
 #   vmid: null
 #   node: pve01.lab.sal9000.tech
 #   os_type: linux
+#   description: "Internal web server for team X"
+#   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP
 #   cores: 2
 #   memory: 2048
 #   disk_size: 20G
@@ -43,4 +45,3 @@ provision_vms: []
 #     - example.com
 #   ssh_authorized_keys:
 #     - "ssh-rsa AAAA... user@example"
-#   cloudinit_userdata: {}  # optional additions to the jinja template context
