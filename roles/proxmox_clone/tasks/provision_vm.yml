@@ -77,10 +77,7 @@
 
 - name: Set next_vmid from qm nextid output (or fallback)
   set_fact:
-    next_vmid: >-
-      {{ (qm_nextid_raw.stdout | default('') | regex_search('\\d+', '\\0') | default('')) | int
-         if (qm_nextid_raw is defined and (qm_nextid_raw.stdout | default('') | length) > 0)
-         else (next_vmid | default(100) | int) }}
+    next_vmid: "{{ (qm_nextid_raw.stdout | default('') | regex_search('\\d+') | default('')) | int if (qm_nextid_raw is defined and (qm_nextid_raw.stdout | default('') | length) > 0) else (next_vmid | default(100) | int) }}"
   when: desired_vmid | default(0) | int == 0
   run_once: false
 
@@ -155,19 +152,9 @@
 
 - name: Parse current cores & memory from qm config (if present)
   set_fact:
-    current_cores: "{{ (qm_config.stdout | regex_search('^\\s*cores:\\s*(\\d+)', '\\1') ) | default('') }}"
-    current_memory: "{{ (qm_config.stdout | regex_search('^\\s*memory:\\s*(\\d+)', '\\1') ) | default('') }}"
+    current_cores: "{{ (qm_config.stdout | regex_search('(?<=cores: )\\d+') ) | default('') }}"
+    current_memory: "{{ (qm_config.stdout | regex_search('(?<=memory: )\\d+') ) | default('') }}"
   when: qm_config is defined
-  run_once: false
-
-- name: Debug desired vs current CPU/memory (optional)
-  debug:
-    msg:
-      vm: "{{ vm_name }}"
-      desired_cores: "{{ desired_cores }}"
-      current_cores: "{{ current_cores | default('undef') }}"
-      desired_memory: "{{ desired_memory }}"
-      current_memory: "{{ current_memory | default('undef') }}"
   run_once: false
 
 - name: Build qm set argv for CPU/memory changes (include only differing flags)
@@ -207,16 +194,33 @@
 
 # --- Ensure network and VLAN match desired settings (idempotent) ----------
 
+- name: Resolve VM bridge
+  ansible.builtin.set_fact:
+    net_bridge_resolved: >-
+      {{
+        vm_item.net_bridge
+        | default(
+            proxmox_cb.get('net_bridge')
+            | default(proxmox_defaults_cb.get('net_bridge'))
+          )
+      }}
+    net_model_resolved: "{{ vm_item.net_model | default('virtio') }}"
+
 - name: Build net0 configuration string
   ansible.builtin.set_fact:
     net0_config: >-
-      {{ vm_item.net_model | default('virtio') }},
-      bridge={{ vm_item.net_bridge }}
+      {{ net_model_resolved }},
+      bridge={{ net_bridge_resolved }}
       {% if vm_item.vlan is defined and vm_item.vlan | string | length > 0 %}
       ,tag={{ vm_item.vlan }}
       {% endif %}
 
-- name: Configure network device (bridge + VLAN)
+- name: Parse current net0 config from qm config
+  set_fact:
+    current_net0: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: ).*') | default('') }}"
+    current_net0_model: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: )[a-zA-Z0-9]+(?==)') | default('') }}"
+
+- name: Configure network device (bridge + VLAN, only if different)
   ansible.builtin.command:
     argv:
       - qm
@@ -227,24 +231,35 @@
   delegate_to: "{{ node_name }}"
   register: net_config_result
   changed_when: net_config_result.rc == 0
+  when: >
+    (current_net0_model != net_model_resolved)
+    or (('bridge=' ~ net_bridge_resolved) not in current_net0)
+    or ((vm_item.vlan is defined and vm_item.vlan | string | length > 0) and (('tag=' ~ (vm_item.vlan | string)) not in current_net0))
+    or ((vm_item.vlan is not defined or vm_item.vlan | string | length == 0) and ('tag=' in current_net0))
 
-- name: Set Proxmox VM tags (if defined)
+- name: Parse current tags from qm config
+  set_fact:
+    current_tags: >-
+      {{ ((qm_config.stdout | default('')) | regex_search('(?<=tags: ).*') | default('')).split(',') | map('trim') | select | list | sort }}
+    desired_tags: "{{ (vm_item.tags.split(',') | map('trim') | list | sort) if vm_item.tags is defined else [] }}"
+
+- name: Set Proxmox VM tags (if defined and different)
   ansible.builtin.command:
     cmd: qm set {{ desired_vmid }} --tags {{ vm_item.tags }}
   delegate_to: "{{ node_name }}"
   become: true
-  when: vm_item.tags is defined
+  register: tags_result
+  changed_when: tags_result.rc == 0
+  when:
+    - vm_item.tags is defined
+    - current_tags != desired_tags
 
 # --- disk size parsing -------------------------------------------------------
 
 - name: Parse current bootdisk raw/fallback lists from qm config (safe)
   set_fact:
-    current_disk_size_raw_list: >-
-      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*size=([^,\\n\\s]+)') }}
-    current_disk_size_fallback_list: >-
-      {{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*,([^,\\n\\s]*G)') }}
-  vars:
-    disk_target: "{{ disk_target }}"
+    current_disk_size_raw_list: "{{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*size=([^,\\n\\s]+)') }}"
+    current_disk_size_fallback_list: "{{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*,([^,\\n\\s]*G)') }}"
   run_once: false
 
 - name: Pick first parsed disk size raw & fallback into simple vars
@@ -262,16 +277,8 @@
 
 - name: Compute desired_disk_gib and current_disk_gib (numeric GiB)
   set_fact:
-    desired_disk_gib: >-
-      {{ (vm_item.disk_size | default('0'))
-         | regex_replace('(?i)g$','')
-         | regex_replace('[^0-9\\.]+','')
-         | float | default(0) }}
-    current_disk_gib: >-
-      {{ (current_disk_size | default('0'))
-         | regex_replace('(?i)g$','')
-         | regex_replace('[^0-9\\.]+','')
-         | float | default(0) }}
+    desired_disk_gib: "{{ (vm_item.disk_size | default('0')) | regex_replace('(?i)g$','') | regex_replace('[^0-9\\.]+','') | float | default(0) }}"
+    current_disk_gib: "{{ (current_disk_size | default('0')) | regex_replace('(?i)g$','') | regex_replace('[^0-9\\.]+','') | float | default(0) }}"
   when: vm_item.disk_size is defined
   run_once: false
 
@@ -285,37 +292,11 @@
 
 - name: Discover candidate disk keys from qm config
   set_fact:
-    _qm_disk_keys: >-
-      {{ (qm_config.stdout | default(''))
-         | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
-  run_once: false
-
-- name: Resolve disk_target_resolved (vm_item -> explicit disk_target -> parse qm_config -> default scsi0)
-  set_fact:
-    disk_target_resolved: >-
-      {{
-        (vm_item.disk_target | default(''))
-        | default( (disk_target | default('')) )
-        | default( (_qm_disk_keys | first) | default('scsi0') )
-      }}
-  run_once: false
-
-- name: Debug resize inputs (show resolved disk target)
-  debug:
-    msg:
-      vmid: "{{ desired_vmid }}"
-      vm_item_disk_target: "{{ vm_item.disk_target | default('UNSET') }}"
-      disk_target_from_vars: "{{ disk_target | default('UNSET') }}"
-      parsed_disk_keys: "{{ _qm_disk_keys }}"
-      disk_target_resolved: "{{ disk_target_resolved }}"
-      vm_item_disk_size: "{{ vm_item.disk_size | default('UNSET') }}"
-      target_exists: "{{ target_exists | default('undef') }}"
+    _qm_disk_keys: "{{ (qm_config.stdout | default('')) | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}"
   run_once: false
 
 - name: Ensure disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
   set_fact:
-    _qm_disk_keys: >-
-      {{ (qm_config.stdout | default('')) | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}
     disk_target_resolved: >-
       {{
         (vm_item.disk_target | default(''))
@@ -324,98 +305,18 @@
       }}
   run_once: false
 
-- name: Try qm disk resize (preferred syntax)
+- name: Resize disk to desired size (qm disk resize)
   ansible.builtin.command:
     cmd: >-
       qm disk resize {{ desired_vmid }} {{ disk_target_resolved }} {{ vm_item.disk_size }}
   delegate_to: "{{ node_name }}"
   become: true
-  register: qm_resize_try1
-  failed_when: false
+  register: qm_resize_result
+  changed_when: qm_resize_result.rc == 0
   when:
     - not target_exists
     - vm_item.disk_size is defined
     - should_resize | default(true)
-
-- name: Compute qm_resize_ok (robustly handle rc or results[])
-  set_fact:
-    qm_resize_ok: >-
-      {{ (qm_resize_try1 is defined) and (
-           (qm_resize_try1.rc is defined and (qm_resize_try1.rc | int) == 0)
-           or
-           (qm_resize_try1.results is defined
-             and (qm_resize_try1.results | length) > 0
-             and (qm_resize_try1.results[0].rc is defined)
-             and (qm_resize_try1.results[0].rc | int) == 0)
-         )
-      }}
-  when: qm_resize_try1 is defined
-  run_once: false
-
-- name: Try legacy qm resize if first attempt failed with argument errors
-  ansible.builtin.command:
-    cmd: >-
-      qm resize {{ desired_vmid }} {{ disk_target_resolved }} {{ vm_item.disk_size }}
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: qm_resize_try2
-  failed_when: false
-  when:
-    - not target_exists
-    - vm_item.disk_size is defined
-    - should_resize | default(true)
-    - qm_resize_ok is defined and qm_resize_ok == false
-
-- name: Compute qm_resize2_ok (robustly handle rc or results[])
-  set_fact:
-    qm_resize2_ok: >-
-      {{ (qm_resize_try2 is defined) and (
-           (qm_resize_try2.rc is defined and (qm_resize_try2.rc | int) == 0)
-           or
-           (qm_resize_try2.results is defined
-             and (qm_resize_try2.results | length) > 0
-             and (qm_resize_try2.results[0].rc is defined)
-             and (qm_resize_try2.results[0].rc | int) == 0)
-         )
-      }}
-  when: qm_resize_try2 is defined
-  run_once: false
-
-- name: Determine final resize status and fail if both attempts failed (safe checks)
-  fail:
-    msg: |
-      Both resize attempts failed for VM {{ desired_vmid }} disk {{ disk_target_resolved | default('NONE') }} -> {{ vm_item.disk_size }}.
-      try1 rc={{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined) else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and (qm_resize_try1.results|length) > 0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
-      try1 stdout={{ (qm_resize_try1.stdout | default('')) }}
-      try1 stderr={{ (qm_resize_try1.stderr | default('')) }}
-
-      try2 rc={{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined) else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and (qm_resize_try2.results|length) > 0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
-      try2 stdout={{ (qm_resize_try2.stdout | default('')) }}
-      try2 stderr={{ (qm_resize_try2.stderr | default('')) }}
-  when:
-    - not target_exists
-    - vm_item.disk_size is defined
-    - ( (qm_resize_ok is not defined or qm_resize_ok == false) and (qm_resize2_ok is not defined or qm_resize2_ok == false) )
-
-- name: Mark resize changed if any attempt succeeded (safe)
-  set_fact:
-    qm_resize_changed: true
-  when:
-    - (qm_resize_ok | default(false)) or (qm_resize2_ok | default(false))
-
-- name: Debug resize attempt outcomes (optional)
-  debug:
-    msg:
-      qm_resize_ok: "{{ qm_resize_ok | default('undef') }}"
-      qm_resize2_ok: "{{ qm_resize2_ok | default('undef') }}"
-      qm_resize_try1_rc: >-
-        {{ (qm_resize_try1.rc if (qm_resize_try1 is defined and qm_resize_try1.rc is defined)
-            else (qm_resize_try1.results[0].rc if (qm_resize_try1 is defined and qm_resize_try1.results is defined and (qm_resize_try1.results|length)>0 and qm_resize_try1.results[0].rc is defined) else 'NA')) }}
-      qm_resize_try2_rc: >-
-        {{ (qm_resize_try2.rc if (qm_resize_try2 is defined and qm_resize_try2.rc is defined)
-            else (qm_resize_try2.results[0].rc if (qm_resize_try2 is defined and qm_resize_try2.results is defined and (qm_resize_try2.results|length)>0 and qm_resize_try2.results[0].rc is defined) else 'NA')) }}
-  when: vm_item.disk_size is defined
-  run_once: false
 
 # --- userdata / snippet ------------------------------------------------------
 
@@ -442,13 +343,6 @@
   set_fact:
     snippets_dir_resolved: >-
       {{ ('/' ~ (_proxmox_snippets_raw | default('var/lib/vz/snippets'))) | regex_replace('/+','/') }}
-  run_once: false
-
-- name: Debug resolved snippets_dir
-  debug:
-    msg:
-      proxmox_raw: "{{ _proxmox_snippets_raw | default('undef') }}"
-      snippets_dir_resolved: "{{ snippets_dir_resolved | default('undef') }}"
   run_once: false
 
 - name: Ensure snippets directory exists on node (create if missing)
@@ -498,78 +392,12 @@
     fail_msg: >-
       NetBox IP allocation is enabled, but required NetBox API settings are missing.
 
-# - name: Resolve NetBox prefix mapping for VM bridge
-#   ansible.builtin.set_fact:
-#     net_bridge_resolved: "{{ vm_item.net_bridge | default(proxmox_cb.get('net_bridge') | default(proxmox_defaults_cb.get('net_bridge'))) }}"
-#     netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
-#     netbox_gateway_cidr: "{{ netbox_gateway_by_bridge[net_bridge_resolved] | default('') }}"
-#   run_once: false
-
-- name: Resolve VM bridge
-  ansible.builtin.set_fact:
-    net_bridge_resolved: >-
-      {{
-        vm_item.net_bridge
-        | default(
-            proxmox_cb.get('net_bridge')
-            | default(proxmox_defaults_cb.get('net_bridge'))
-          )
-      }}
-
 - name: Resolve NetBox IP range
   set_fact:
     netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] }}"
 
-- name: Resolve NetBox prefix mapping
-  ansible.builtin.set_fact:
-    netbox_prefix_cidr: "{{ netbox_prefixes_by_bridge[net_bridge_resolved] | default('') }}"
-    netbox_gateway_cidr: "{{ netbox_gateway_by_bridge[net_bridge_resolved] | default('') }}"
-
 - name: Allocate IP from NetBox when ip is not defined and allocation is enabled
   block:
-    # - name: Assert NetBox allocation config exists
-    #   assert:
-    #     that:
-    #       - netbox_allocate_ip | default(true) | bool
-    #       - (netbox_resolved_api_url | default('')) | length > 0
-    #       - (netbox_resolved_token | default('')) | length > 0
-    #       - netbox_prefix_cidr | length > 0
-    #     fail_msg: >-
-    #       NetBox IP allocation is enabled but missing configuration for
-    #       netbox.api_url / netbox.token or prefix mapping for {{ net_bridge_resolved }}.
-
-    # - name: Lookup NetBox prefix by CIDR
-    #   ansible.builtin.uri:
-    #     url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/?prefix={{ netbox_prefix_cidr }}"
-    #     method: GET
-    #     headers:
-    #       Authorization: "Bearer {{ netbox_resolved_token }}"
-    #       Accept: "application/json"
-    #     validate_certs: "{{ netbox.ssl_verify | default(true) }}"
-    #   register: netbox_prefix_search
-    #   failed_when: netbox_prefix_search.status != 200
-
-    # - name: Assert NetBox prefix exists for {{ netbox_prefix_cidr }}
-    #   assert:
-    #     that:
-    #       - netbox_prefix_search.json.count | int > 0
-    #     fail_msg: "No NetBox prefix found for {{ netbox_prefix_cidr }}"
-
-    # - name: Set NetBox prefix id
-    #   set_fact:
-    #     netbox_prefix_id: "{{ netbox_prefix_search.json.results[0].id }}"
-
-    # - name: Query NetBox for an available IP in the prefix
-    #   ansible.builtin.uri:
-    #     url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/prefixes/{{ netbox_prefix_id }}/available-ips/?limit=1"
-    #     method: GET
-    #     headers:
-    #       Authorization: "Bearer {{ netbox_resolved_token }}"
-    #       Accept: "application/json"
-    #     validate_certs: "{{ netbox.ssl_verify | default(true) }}"
-    #   register: netbox_available_ip
-    #   failed_when: netbox_available_ip.status != 200
-
     - name: Lookup IP range
       uri:
         url: >-
@@ -579,9 +407,6 @@
           Authorization: "Bearer {{ netbox_resolved_token }}"
           Accept: application/json
       register: netbox_ip_range
-
-    - debug:
-        var: netbox_ip_range.json
 
     - name: Allocate next IP from NetBox range
       uri:
@@ -595,12 +420,6 @@
         body: {}
         status_code: 201
       register: netbox_available_ip
-
-# --- debug NetBox response and assert available IP exists --->
-    - name: Show NetBox response
-      debug:
-        var: netbox_available_ip.json
-# --- end debug NetBox response and assert available IP exists --->
 
     - name: Assert NetBox returned an available IP
       assert:
@@ -628,10 +447,10 @@
   run_once: false
 - name: Decide whether to update cicustom/ipconfig/DNS for VM
   set_fact:
-    current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*', '\\0') ) | default('') }}"
-    current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*', '\\0') ) | default('') }}"
-    current_nameserver: "{{ (qm_config.stdout | regex_search('nameserver:.*', '\\0') ) | default('') }}"
-    current_searchdomain: "{{ (qm_config.stdout | regex_search('searchdomain:.*', '\\0') ) | default('') }}"
+    current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*') ) | default('') }}"
+    current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*') ) | default('') }}"
+    current_nameserver: "{{ (qm_config.stdout | regex_search('nameserver:.*') ) | default('') }}"
+    current_searchdomain: "{{ (qm_config.stdout | regex_search('searchdomain:.*') ) | default('') }}"
   when: qm_config.stdout is defined
 
 - name: Build desired cicustom and ip/DNS strings (works for Linux & Windows)
@@ -699,20 +518,6 @@
     or (vm_item.search_domains is defined and vm_item.search_domains and
         (current_searchdomain | default('')) != ('searchdomain: ' ~ (vm_item.search_domains | join(' '))))
   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )
-
-# - name: Ensure cicustom + ipconfig set
-#   ansible.builtin.command:
-#     cmd: >-
-#       qm set {{ desired_vmid }}
-#       --cicustom user=local:snippets/cloudbase-{{ desired_vmid }}
-#       {% if vm_item.ip is defined %}
-#       --ipconfig0 {{ vm_item.ip }},gw={{ vm_item.gateway | default(omit) }}
-#       {% endif %}
-#   delegate_to: "{{ node_name }}"
-#   become: true
-#   register: qm_set_result
-#   failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr|default('')) )
-
 
 # --- start & wait -----------------------------------------------------------
 
