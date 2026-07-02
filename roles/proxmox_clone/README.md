@@ -8,7 +8,8 @@ Features:
 - Idempotent: reconciles cores/memory, network bridge/VLAN, tags, description/notes,
   disk size, and cicustom/ipconfig/DNS against the VM's current `qm config` —
   only runs `qm set`/resize when something actually differs
-- Optional NetBox IP allocation when `ip` isn't supplied
+- Optional NetBox IP allocation when `ip` isn't supplied — carries `description`, `domain`
+  (as `dns_name`), and `tags` from `provision_vms` onto the NetBox IP reservation
 - Waits for OS availability (SSH/WinRM) after starting a newly-cloned VM
 - Uses Jinja2 templates for cloud-init and cloudbase-init userdata
 
@@ -34,8 +35,11 @@ Variable reference:
     `proxmox_defaults.node`), `storage` (optional, falls back to `proxmox.storage` /
     `proxmox_defaults.storage`), `os_type` (`linux` or `windows`, default `linux`).
   - `net_bridge`, `net_model` (default `virtio`), `vlan`, `disk_target`, `cores` (default 2),
-    `memory` (default 2048), `disk_size` (e.g. `100G` — only grows the disk, never shrinks),
-    `tags` (comma-separated string).
+    `memory` (default 2048), `disk_size` (e.g. `100G` — only grows the disk, never shrinks).
+  - `tags` (comma-separated string, e.g. `"windows,2025,core"`). Set as the VM's tags in Proxmox
+    (`qm set --tags`), and — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the
+    `tags` on that NetBox IP address reservation (as a plain list of tag names; NetBox is expected
+    to get-or-create tags by name).
   - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects
     a bare IP), `gateway`, `dns_servers` (list), `search_domains` (list), `hostname`,
     `ssh_authorized_keys` (list, Linux only today — see Templates note below), `winrm_ssl`.

@@ -30,7 +30,7 @@ provision_vms:
     cores: 4
     memory: 8192
     disk_size: 100G
-    tags: "windows,2025,core"
+    tags: "windows,2025,core,ans-test"
 proxmox:
   storage: nfs_ssd
   net_bridge: vnet30

@@ -92,14 +92,19 @@
           Accept: application/json
       register: netbox_ip_range
 
-    - name: Build NetBox IP reservation body (description/dns_name, only if provided)
+    - name: Build NetBox IP reservation body (description/dns_name/tags, only if provided)
       set_fact:
         netbox_ip_body: >-
           {{
             {}
             | combine({'description': vm_item.description} if vm_item.description is defined else {})
             | combine({'dns_name': (vm_item.name ~ '.' ~ vm_item.domain)} if vm_item.domain is defined else {})
+            | combine({'tags': desired_tags} if (desired_tags | default([]) | length) > 0 else {})
           }}
+
+    - name: Debug NetBox IP reservation request body (temporary, for tags troubleshooting)
+      debug:
+        var: netbox_ip_body
 
     - name: Allocate next IP from NetBox range
       uri:
@@ -113,6 +118,10 @@
         body: "{{ netbox_ip_body }}"
         status_code: 201
       register: netbox_available_ip
+
+    - name: Debug NetBox IP reservation response (temporary, for tags troubleshooting)
+      debug:
+        var: netbox_available_ip.json
 
     - name: Assert NetBox returned an available IP
       assert:
