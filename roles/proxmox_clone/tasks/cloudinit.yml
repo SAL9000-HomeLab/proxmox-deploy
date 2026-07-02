@@ -92,6 +92,39 @@
           Accept: application/json
       register: netbox_ip_range
 
+    - name: Look up existing NetBox tags by name
+      uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/?name={{ tag_name | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_resolved_token }}"
+          Accept: application/json
+        status_code: 200
+      loop: "{{ desired_tags | default([]) }}"
+      loop_control:
+        loop_var: tag_name
+      register: netbox_tag_lookup
+      when: (desired_tags | default([]) | length) > 0
+
+    - name: Create NetBox tags that don't exist yet
+      uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/"
+        method: POST
+        headers:
+          Authorization: "Token {{ netbox_resolved_token }}"
+          Accept: application/json
+        body_format: json
+        body:
+          name: "{{ item.tag_name }}"
+          slug: "{{ item.tag_name | lower | regex_replace('[^a-z0-9]+', '-') | regex_replace('^-+|-+$', '') }}"
+        status_code: 201
+      loop: "{{ netbox_tag_lookup.results | default([]) }}"
+      loop_control:
+        label: "{{ item.tag_name }}"
+      when:
+        - (desired_tags | default([]) | length) > 0
+        - item.json.count == 0
+
     - name: Build NetBox tag objects (name-keyed; avoids NetBox treating numeric-looking tags as related-object IDs)
       set_fact:
         netbox_tag_objects: "[{% for t in desired_tags %}{\"name\": {{ t | to_json }}}{% if not loop.last %}, {% endif %}{% endfor %}]"
