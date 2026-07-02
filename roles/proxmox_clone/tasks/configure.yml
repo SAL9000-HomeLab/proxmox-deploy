@@ -84,8 +84,8 @@
 
 - name: Parse current net0 config from qm config
   set_fact:
-    current_net0: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: ).*') | default('') }}"
-    current_net0_model: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: )[a-zA-Z0-9]+(?==)') | default('') }}"
+    current_net0: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: ).*') | default('', true) }}"
+    current_net0_model: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: )[a-zA-Z0-9]+(?==)') | default('', true) }}"
 
 - name: Configure network device (bridge + VLAN, only if different)
   ansible.builtin.command:
@@ -107,7 +107,7 @@
 - name: Parse current tags from qm config
   set_fact:
     current_tags: >-
-      {{ ((qm_config.stdout | default('')) | regex_search('(?<=tags: ).*') | default('')).split(',') | map('trim') | select | list | sort }}
+      {{ ((qm_config.stdout | default('')) | regex_search('(?<=tags: ).*') | default('', true)).split(',') | map('trim') | select | list | sort }}
     desired_tags: "{{ (vm_item.tags.split(',') | map('trim') | list | sort) if vm_item.tags is defined else [] }}"
 
 - name: Set Proxmox VM tags (if defined and different)
@@ -123,7 +123,7 @@
 
 - name: Parse current description/notes from qm config
   set_fact:
-    current_description: "{{ (qm_config.stdout | default('')) | regex_search('(?<=description: ).*') | default('') }}"
+    current_description: "{{ (qm_config.stdout | default('')) | regex_search('(?<=description: ).*') | default('', true) }}"
 
 - name: Set Proxmox VM description/notes (if defined and different)
   ansible.builtin.command:
