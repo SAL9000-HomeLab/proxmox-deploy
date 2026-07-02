@@ -107,10 +107,6 @@
             | combine({'tags': netbox_tag_objects} if (desired_tags | default([]) | length) > 0 else {})
           }}
 
-    - name: Debug NetBox IP reservation request body (temporary, for tags troubleshooting)
-      debug:
-        var: netbox_ip_body
-
     - name: Allocate next IP from NetBox range
       uri:
         url: >-
@@ -123,10 +119,6 @@
         body: "{{ netbox_ip_body }}"
         status_code: 201
       register: netbox_available_ip
-
-    - name: Debug NetBox IP reservation response (temporary, for tags troubleshooting)
-      debug:
-        var: netbox_available_ip.json
 
     - name: Assert NetBox returned an available IP
       assert:
