@@ -38,8 +38,10 @@ Variable reference:
     `memory` (default 2048), `disk_size` (e.g. `100G` — only grows the disk, never shrinks).
   - `tags` (comma-separated string, e.g. `"windows,2025,core"`). Set as the VM's tags in Proxmox
     (`qm set --tags`), and — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the
-    `tags` on that NetBox IP address reservation (as a plain list of tag names; NetBox is expected
-    to get-or-create tags by name).
+    `tags` on that NetBox IP address reservation, sent as `{"name": "<tag>"}` objects (NetBox
+    get-or-creates tags by name). Plain tag name strings are deliberately not used because NetBox
+    interprets a numeric-looking string (e.g. a year like `"2025"`) as a tag object ID lookup rather
+    than a name, which fails for any tag that hasn't already been created with that numeric ID.
   - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects
     a bare IP), `gateway`, `dns_servers` (list), `search_domains` (list), `hostname`,
     `ssh_authorized_keys` (list, Linux only today — see Templates note below), `winrm_ssl`.
