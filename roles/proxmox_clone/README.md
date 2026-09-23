@@ -48,8 +48,14 @@ Variable reference:
   - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects
     a bare IP), `gateway`, `dns_servers` (list), `search_domains` (list), `hostname`,
     `ssh_authorized_keys` (list, Linux only today — see Templates note below), `winrm_ssl`.
-  - `full`: `true` for a full clone, `false` for a linked clone (default from
-    `proxmox_clone_behavior.full_clone` / `proxmox.full_clone` / `proxmox_defaults.full_clone`, which is `false`).
+  - `linked_clone`: `true` for a linked clone, `false` (default) for a full clone. Falls back to
+    `proxmox_clone_behavior.linked_clone`, then `proxmox.linked_clone`, then `false`. Linked
+    clones share the template's base disk: they're created on the template's storage (the
+    `storage` setting is ignored), need storage that supports them (e.g. qcow2 on NFS/dir,
+    LVM-thin, ZFS, Ceph), and keep the template in use for as long as the clone exists.
+  - `full` (legacy): inverse of `linked_clone` (`false` = linked). Still honoured at each level
+    (`full` per VM, `full_clone` in `proxmox_clone_behavior` / `proxmox`) when `linked_clone`
+    isn't set at that level.
   - `description`: free-text note. Set as the VM's Notes field in Proxmox (`qm set --description`), and
     — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the `description` on that
     NetBox IP address reservation.
@@ -63,11 +69,11 @@ Variable reference:
     `--nameserver` config (which only reads `dns_servers`).
 - `proxmox`: role-level defaults (merged with `proxmox_defaults`).
   - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `disk_target`,
-    `full_clone`, `cpu`, `memory`.
+    `linked_clone` (legacy `full_clone`), `cpu`, `memory`.
   - `proxmox_defaults` also defines `timeout` and `timezone` keys, but no current task reads
     them — setting them has no effect. (`timeout` is unrelated to the guest-wait timeout below.)
-- `proxmox_clone_behavior`: optional dict, currently only `disk_target` and `full_clone` keys.
-  Overrides `proxmox`/`proxmox_defaults` for those two settings but is itself overridden by a
+- `proxmox_clone_behavior`: optional dict, currently only `disk_target` and `linked_clone`
+  (legacy `full_clone`) keys. Overrides `proxmox`/`proxmox_defaults` for those settings but is itself overridden by a
   per-VM value. No default is defined for this variable.
 - `proxmox_clone_wait`: optional dict controlling the post-boot guest-reachability wait in
   `boot.yml` — `service_timeout` (seconds, default `600`) and `poll_interval` (seconds,

@@ -29,13 +29,17 @@
            | default( proxmox_cb.get('disk_target') | default(proxmox_defaults_cb.get('disk_target','scsi0')) )
          )
       }}
-    use_full_clone: >-
-      {{ vm_item.full
-         | default(
-           proxmox_behavior_cb.get('full_clone')
-           | default( proxmox_cb.get('full_clone') | default(proxmox_defaults_cb.get('full_clone', true)) )
-         )
-      | bool }}
+    # linked_clone (default false = full clone). Per-VM wins, then
+    # proxmox_clone_behavior, then proxmox. At each level the legacy inverse
+    # flag (full / full_clone) is still honoured when linked_clone isn't set.
+    use_linked_clone: >-
+      {{ (vm_item.linked_clone | bool) if vm_item.linked_clone is defined
+         else (not (vm_item.full | bool)) if vm_item.full is defined
+         else (proxmox_behavior_cb.linked_clone | bool) if 'linked_clone' in proxmox_behavior_cb
+         else (not (proxmox_behavior_cb.full_clone | bool)) if 'full_clone' in proxmox_behavior_cb
+         else (proxmox_cb.linked_clone | bool) if 'linked_clone' in proxmox_cb
+         else (not (proxmox_cb.full_clone | bool)) if 'full_clone' in proxmox_cb
+         else false }}
   run_once: false
 
 - name: Run qm list on node to discover existing VMs

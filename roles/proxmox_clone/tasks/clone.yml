@@ -20,8 +20,10 @@
       failed_when: qm_clone_full.rc != 0 and ('already exists' not in (qm_clone_full.stderr | default('')) )
       when:
         - not target_exists
-        - use_full_clone | bool
+        - not (use_linked_clone | bool)
 
+    # Linked clones share the template's base disk, so they always land on the
+    # template's storage (qm clone rejects --storage without --full).
     - name: Clone (linked clone path — no --storage)
       ansible.builtin.command:
         cmd: >-
@@ -34,7 +36,7 @@
       failed_when: qm_clone_linked.rc != 0 and ('already exists' not in (qm_clone_linked.stderr | default('')) )
       when:
         - not target_exists
-        - not (use_full_clone | bool)
+        - use_linked_clone | bool
 
   when: not target_exists
 

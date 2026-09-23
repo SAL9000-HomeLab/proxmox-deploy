@@ -7,7 +7,9 @@ proxmox_defaults:
   storage: nfs_ssd
   snippets_dir: /var/lib/vz/snippets
   disk_target: scsi0
-  full_clone: false
+  # linked_clone: false  # full clones by default; set true (here, in proxmox,
+  #                      # proxmox_clone_behavior or per VM) for linked clones.
+  #                      # Left unset so legacy full/full_clone settings still apply.
   net_bridge: vnet30
   net_model: virtio
   vlan: 30
@@ -29,6 +31,7 @@ provision_vms: []
 # Example (commented) for maintainers:
 # - name: web-01
 #   template_vmid: 9000
+#   linked_clone: false  # default; true = linked clone on the template's storage
 #   vmid: null
 #   node: pve01.lab.sal9000.tech
 #   os_type: linux
