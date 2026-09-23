@@ -101,7 +101,7 @@
           {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/
         method: GET
         headers:
-          Authorization: "Bearer {{ netbox_resolved_token }}"
+          Authorization: "Token {{ netbox_resolved_token }}"
           Accept: application/json
       register: netbox_ip_range
 
