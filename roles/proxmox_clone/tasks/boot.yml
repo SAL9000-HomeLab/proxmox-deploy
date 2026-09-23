@@ -1,16 +1,26 @@
 ---
 # roles/proxmox_clone/tasks/boot.yml
-# Start newly-cloned VMs and wait for the guest OS to come up.
+# Start the VM if it isn't running and wait for the guest OS to come up.
 # Expects vm_item loop variable and facts from resolve_vars.yml / clone.yml / cloudinit.yml.
 
-- name: Start the VM (when newly cloned)
+# Check actual power state rather than "newly cloned", so a VM left stopped by a
+# previously failed run is still started on re-run.
+- name: Get current VM power state
+  ansible.builtin.command:
+    cmd: qm status {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_status
+  changed_when: false
+
+- name: Start the VM (when not running)
   ansible.builtin.command:
     cmd: qm start {{ desired_vmid }}
   delegate_to: "{{ node_name }}"
   become: true
   register: qm_start
-  changed_when: "'status' in (qm_start.stdout | default('')) or qm_start.rc == 0"
-  when: not target_exists
+  changed_when: qm_start.rc == 0
+  when: "'status: running' not in qm_status.stdout"
 
 - name: Wait for guest to accept connections (linux => SSH, windows => WinRM)
   block:
