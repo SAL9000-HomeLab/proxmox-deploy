@@ -15,5 +15,8 @@
 - name: Reconcile cloud-init/cloudbase-init and NetBox IP
   ansible.builtin.import_tasks: cloudinit.yml
 
+- name: Manage VM DNS records
+  ansible.builtin.import_tasks: technitium_dns.yml
+
 - name: Start VM and wait for guest
   ansible.builtin.import_tasks: boot.yml

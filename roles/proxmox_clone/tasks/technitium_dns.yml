@@ -1,0 +1,42 @@
+---
+# Manage the forward A record and associated reverse PTR record for a VM.
+
+- name: Resolve Technitium DNS settings
+  ansible.builtin.set_fact:
+    technitium_dns_resolved_api_url: "{{ (technitium_dns | default({})).api_url | default('') }}"
+    technitium_dns_resolved_api_port: "{{ (technitium_dns | default({})).api_port | default(5380) | int }}"
+    technitium_dns_resolved_token: "{{ (technitium_dns | default({})).api_token | default('') }}"
+    technitium_dns_resolved_zone: "{{ vm_item.dns_zone | default((technitium_dns | default({})).zone | default('')) }}"
+    technitium_dns_resolved_validate_certs: "{{ (technitium_dns | default({})).validate_certs | default(true) | bool }}"
+    technitium_dns_resolved_ttl: "{{ vm_item.dns_ttl | default((technitium_dns | default({})).ttl | default(3600)) | int }}"
+  run_once: false
+
+- name: Validate Technitium DNS configuration
+  ansible.builtin.assert:
+    that:
+      - technitium_dns_resolved_api_url | length > 0
+      - technitium_dns_resolved_token | length > 0
+      - technitium_dns_resolved_zone | length > 0
+      - vm_ip_address | length > 0
+    fail_msg: >-
+      Technitium DNS is enabled for this VM but api_url, api_token, zone, or an IPv4 VM IP is missing.
+  when: (technitium_dns | default({})).enabled | default(true) | bool
+
+- name: Create VM A record and associated PTR record in Technitium DNS
+  effectivelywild.technitium_dns.technitium_dns_add_record:
+    api_url: "{{ technitium_dns_resolved_api_url }}"
+    api_port: "{{ technitium_dns_resolved_api_port }}"
+    api_token: "{{ technitium_dns_resolved_token }}"
+    validate_certs: "{{ technitium_dns_resolved_validate_certs }}"
+    name: "{{ vm_item.dns_name | default(vm_item.name ~ '.' ~ technitium_dns_resolved_zone) }}"
+    zone: "{{ technitium_dns_resolved_zone }}"
+    type: A
+    ipAddress: "{{ vm_ip_address }}"
+    ptr: true
+    createPtrZone: "{{ (technitium_dns | default({})).create_ptr_zone | default(false) | bool }}"
+    ttl: "{{ technitium_dns_resolved_ttl }}"
+    overwrite: true
+  when:
+    - (technitium_dns | default({})).enabled | default(true) | bool
+    - technitium_dns_resolved_api_url | length > 0
+    - technitium_dns_resolved_token | length > 0

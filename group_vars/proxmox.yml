@@ -30,6 +30,16 @@ netbox_gateway_by_bridge:
   vnet40: 10.100.40.1
   vnet150: 10.100.150.1
 
+technitium_dns:
+  enabled: false
+  api_url: "https://dns.example.com"
+  api_port: 53443
+  api_token: ""
+  validate_certs: true
+  zone: "lab.sal9000.tech"
+  ttl: 3600
+  create_ptr_zone: true
+
 # Canonical template catalog.
 # The template names here must match the names created in the vm-templates repo.
 template_catalog:
