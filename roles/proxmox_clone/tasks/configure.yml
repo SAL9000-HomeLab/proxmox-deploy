@@ -152,66 +152,76 @@
     - vm_item.description is defined
     - current_description != vm_item.description
 
-# --- disk size parsing -------------------------------------------------------
+# --- disk resize (grow-only, idempotent) -------------------------------------
 
-- name: Parse current bootdisk raw/fallback lists from qm config (safe)
+# Collect real disks (scsiN/virtioN/sataN/ideN, excluding cdroms) and their size=.
+- name: Parse disks and boot order from qm config
   set_fact:
-    current_disk_size_raw_list: "{{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*size=([^,\\n\\s]+)') }}"
-    current_disk_size_fallback_list: "{{ (qm_config.stdout | default('')) | regex_findall(disk_target ~ ':[^\\n]*,([^,\\n\\s]*G)') }}"
-  run_once: false
+    _qm_disk_lines: >-
+      {{ (qm_config.stdout | default('')) | regex_findall('(?m)^((?:scsi|virtio|sata|ide)\d+): (.*)$')
+         | rejectattr('1', 'search', 'media=cdrom') | list }}
+    _qm_boot_order: >-
+      {{ (((qm_config.stdout | default('')) | regex_findall('(?m)^boot: .*order=([^,\s]+)')) + ['']) | first
+         | regex_findall('[^;]+') }}
 
-- name: Pick first parsed disk size raw & fallback into simple vars
+- name: Map disk names to sizes
   set_fact:
-    current_disk_size_raw: "{{ (current_disk_size_raw_list | first) | default('') }}"
-    current_disk_size_fallback: "{{ (current_disk_size_fallback_list | first) | default('') }}"
-  run_once: false
+    _qm_disks: >-
+      {{ dict(_qm_disk_lines | map(attribute='0')
+              | zip(_qm_disk_lines | map(attribute='1') | map('regex_replace', '^(?:.*size=([0-9.]+[KMGT]?).*|.*)$', '\1'))) }}
 
-- name: Compute final current_disk_size (prefer raw then fallback)
-  set_fact:
-    current_disk_size: >-
-      {{ current_disk_size_raw if (current_disk_size_raw is defined and (current_disk_size_raw | length) > 0)
-         else (current_disk_size_fallback | default('')) }}
-  run_once: false
-
-- name: Compute desired_disk_gib and current_disk_gib (numeric GiB)
-  set_fact:
-    desired_disk_gib: "{{ (vm_item.disk_size | default('0')) | regex_replace('(?i)g$','') | regex_replace('[^0-9\\.]+','') | float | default(0) }}"
-    current_disk_gib: "{{ (current_disk_size | default('0')) | regex_replace('(?i)g$','') | regex_replace('[^0-9\\.]+','') | float | default(0) }}"
-  when: vm_item.disk_size is defined
-  run_once: false
-
-- name: Decide whether resize is needed (compare numeric GiB)
-  set_fact:
-    should_resize: "{{ (desired_disk_gib | float) > (current_disk_gib | float) }}"
-  when: vm_item.disk_size is defined
-  run_once: false
-
-# --- robust resize block -----------------------------------------------------
-
-- name: Discover candidate disk keys from qm config
-  set_fact:
-    _qm_disk_keys: "{{ (qm_config.stdout | default('')) | regex_findall('(?:\\n|^)\\s*([a-zA-Z0-9_]+\\d*):') }}"
-  run_once: false
-
-- name: Ensure disk_target_resolved is set (vm_item -> vars -> parse qm_config -> fallback)
+# Use the requested disk_target if the VM actually has it; otherwise fall back to
+# the first disk in the boot order, then to the first disk found.
+- name: Resolve disk to resize
   set_fact:
     disk_target_resolved: >-
-      {{
-        (vm_item.disk_target | default(''))
-        | default( disk_target | default(proxmox_defaults.disk_target | default('')) )
-        | default( (_qm_disk_keys | first) | default('scsi0') )
-      }}
-  run_once: false
+      {{ disk_target if disk_target in _qm_disks
+         else ((_qm_boot_order | select('in', _qm_disks) | list) + (_qm_disks | list)) | first | default('') }}
 
-- name: Resize disk to desired size (qm disk resize)
+- name: Warn when requested disk_target is not present on the VM
+  ansible.builtin.debug:
+    msg: >-
+      disk_target '{{ disk_target }}' not found on VM {{ desired_vmid }}
+      (disks: {{ _qm_disks | list | join(', ') }}); using '{{ disk_target_resolved }}' instead.
+  when:
+    - vm_item.disk_size is defined
+    - disk_target not in _qm_disks
+    - disk_target_resolved | length > 0
+
+- name: Fail when no resizable disk was found
+  ansible.builtin.fail:
+    msg: "No disk found in qm config for VM {{ desired_vmid }}; cannot resize to {{ vm_item.disk_size }}."
+  when:
+    - vm_item.disk_size is defined
+    - disk_target_resolved | length == 0
+
+# Sizes may be K/M/G/T suffixed (or bare bytes); normalise both sides to GiB.
+- name: Split desired and current disk size into number and unit
+  set_fact:
+    _desired_size_parts: "{{ ((vm_item.disk_size | string | upper | regex_findall('([0-9.]+)\\s*([KMGT]?)') | map('list') | list) + [['0', '']]) | first }}"
+    _current_size_parts: "{{ ((_qm_disks[disk_target_resolved] | default('0') | regex_findall('([0-9.]+)([KMGT]?)') | map('list') | list) + [['0', '']]) | first }}"
+    _gib_per_unit: {'K': 0.00000095367431640625, 'M': 0.0009765625, 'G': 1, 'T': 1024, '': 0.000000000931322574615478515625}
+  when: vm_item.disk_size is defined
+
+- name: Compute desired and current disk size in GiB
+  set_fact:
+    desired_disk_gib: "{{ (_desired_size_parts[0] | float) * _gib_per_unit[_desired_size_parts[1]] }}"
+    current_disk_gib: "{{ (_current_size_parts[0] | float) * _gib_per_unit[_current_size_parts[1]] }}"
+  when: vm_item.disk_size is defined
+
+- name: Resize disk to desired size (qm disk resize; grows only)
   ansible.builtin.command:
-    cmd: >-
-      qm disk resize {{ desired_vmid }} {{ disk_target_resolved }} {{ vm_item.disk_size }}
+    argv:
+      - qm
+      - disk
+      - resize
+      - "{{ desired_vmid }}"
+      - "{{ disk_target_resolved }}"
+      - "{{ vm_item.disk_size }}"
   delegate_to: "{{ node_name }}"
   become: true
   register: qm_resize_result
   changed_when: qm_resize_result.rc == 0
   when:
-    - not target_exists
     - vm_item.disk_size is defined
-    - should_resize | default(true)
+    - (desired_disk_gib | float) > (current_disk_gib | float)
