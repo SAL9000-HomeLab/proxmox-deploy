@@ -30,6 +30,63 @@ netbox_gateway_by_bridge:
   vnet40: 10.100.40.1
   vnet150: 10.100.150.1
 
+# Canonical template catalog.
+# The template names here must match the names created in the vm-templates repo.
+template_catalog:
+  rocky9: tpl-rocky-9
+  rocky10: tpl-rocky-10
+  ubuntu2404: tpl-ubuntu-2404
+  windows2025_core: tpl-windows-server-2025-core
+  windows2025_desktop: tpl-windows-server-2025-desktop
+
+# Example deployment inventory.
+# The template field references a golden image built by vm-templates.
+# Instance-specific values such as name, ip, dns, and gateway are applied here.
+provision_vms:
+  - name: rocky10-web-01
+    template: tpl-rocky-10
+    template_vmid: 9003
+    vmid: 3101
+    node: pve01.lab.sal9000.tech
+    os_type: linux
+    net_bridge: vnet30
+    ip: 10.100.30.11/24
+    gateway: 10.100.30.1
+    dns_servers:
+      - 10.100.30.101
+      - 10.100.30.111
+    search_domains:
+      - lab.sal9000.tech
+    cores: 2
+    memory: 4096
+    disk_size: 40G
+    tags:
+      - rocky
+      - linux
+      - web
+
+  - name: rocky10-db-01
+    template: tpl-rocky-10
+    template_vmid: 9003
+    vmid: 3102
+    node: pve01.lab.sal9000.tech
+    os_type: linux
+    net_bridge: vnet30
+    ip: 10.100.30.12/24
+    gateway: 10.100.30.1
+    dns_servers:
+      - 10.100.30.101
+      - 10.100.30.111
+    search_domains:
+      - lab.sal9000.tech
+    cores: 4
+    memory: 8192
+    disk_size: 80G
+    tags:
+      - rocky
+      - linux
+      - database
+
 # Optional AWX credential file paths used by site.yml:
 # proxmox_creds_file: "~/ansible-secrets/proxmox/proxmox_creds.yml"
 # domain_join_file: "~/ansible-secrets/windows/domain_join.yml"
