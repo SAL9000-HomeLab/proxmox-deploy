@@ -76,6 +76,19 @@
     fail_msg: >-
       NetBox IP allocation is enabled, but required NetBox API settings are missing.
 
+# Re-runs against an existing VM must keep the IP it was already given rather
+# than reserving a fresh one from NetBox each time.
+- name: Reuse IP already configured on the VM (ipconfig0)
+  set_fact:
+    existing_vm_ip: "{{ ((qm_config.stdout | default('') | regex_findall('(?m)^ipconfig0: .*?\\bip=([0-9.]+/[0-9]+)')) + ['']) | first }}"
+
+- name: Set allocated VM IP from existing VM config
+  set_fact:
+    resolved_vm_ip: "{{ existing_vm_ip }}"
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - existing_vm_ip | length > 0
+
 - name: Resolve NetBox IP range
   set_fact:
     netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] }}"
@@ -88,9 +101,39 @@
           {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/
         method: GET
         headers:
-          Authorization: "Bearer {{ netbox_resolved_token }}"
+          Authorization: "Token {{ netbox_resolved_token }}"
           Accept: application/json
       register: netbox_ip_range
+
+    # NetBox only looks up nested tag references; it never creates them. Create any
+    # missing tags first so the IP reservation POST below doesn't fail validation.
+    - name: Lookup NetBox tags by name
+      uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/?name={{ item | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_resolved_token }}"
+          Accept: application/json
+      loop: "{{ desired_tags | default([]) }}"
+      register: netbox_tag_lookup
+
+    - name: Create missing NetBox tags
+      uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/"
+        method: POST
+        headers:
+          Authorization: "Token {{ netbox_resolved_token }}"
+          Accept: application/json
+        body_format: json
+        body:
+          name: "{{ item.item }}"
+          slug: "{{ item.item | lower | regex_replace('[^a-z0-9_-]+', '-') }}"
+        status_code: 201
+      loop: "{{ netbox_tag_lookup.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.json.count | int == 0
+      changed_when: true
 
     - name: Build NetBox tag objects (name-keyed; avoids NetBox treating numeric-looking tags as related-object IDs)
       set_fact:
@@ -131,6 +174,7 @@
   when:
     - (vm_item.ip is not defined or vm_item.ip == "")
     - netbox_allocate_ip | default(true) | bool
+    - existing_vm_ip | length == 0
   run_once: false
 
 - name: Set final VM IP and gateway variables for later configuration
