@@ -7,30 +7,48 @@ of the actual logic lives in the `proxmox_clone` role — see
 
 Use `site.yml` from AWX and pass VM definitions through job extra vars.
 
+## Template catalog contract
+
+The image-building repo owns the template identity. This repo consumes those canonical template
+names and applies runtime values such as VM name, IP, gateway, DNS, and tags at deployment time.
+
+```yaml
+template_catalog:
+  rocky9: tpl-rocky-9
+  rocky10: tpl-rocky-10
+  ubuntu2404: tpl-ubuntu-2404
+  windows2025_core: tpl-windows-server-2025-core
+  windows2025_desktop: tpl-windows-server-2025-desktop
+```
+
+The deploy repo should never invent a template name on the fly. It should reference the template
+name already created in the VM template repo and then set per-instance values separately.
+
 Example AWX extra vars:
 ```yaml
 provision_vms:
-  - name: W25C-TEST001
-    description: "test vm deployment"
-    domain: "lab.sal9000.tech"
-    template_vmid: 9001
+  - name: rocky10-web-01
+    template: tpl-rocky-10
+    template_vmid: 9003
     node: pve01.lab.sal9000.tech
-    vmid: 3021
+    vmid: 3101
     disk_target: scsi0
-    os_type: windows
+    os_type: linux
     net_bridge: vnet30
-    # ip: 10.100.30.25/24
-    # gateway: 10.100.30.1
+    ip: 10.100.30.11/24
+    gateway: 10.100.30.1
     dns_servers:
       - 10.100.30.101
       - 10.100.30.111
     search_domains:
       - lab.sal9000.tech
-      - ds.sal9000.tech
-    cores: 4
-    memory: 8192
-    disk_size: 100G
-    tags: "windows,2025,core,ans-test"
+    cores: 2
+    memory: 4096
+    disk_size: 40G
+    tags:
+      - rocky
+      - linux
+      - web
 proxmox:
   storage: nfs_ssd
   net_bridge: vnet30
