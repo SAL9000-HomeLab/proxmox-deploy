@@ -36,10 +36,11 @@ Variable reference:
     `proxmox_defaults.storage`), `os_type` (`linux` or `windows`, default `linux`).
   - `net_bridge`, `net_model` (default `virtio`), `vlan`, `disk_target`, `cores` (default 2),
     `memory` (default 2048), `disk_size` (e.g. `100G` — only grows the disk, never shrinks).
-  - `tags` (comma-separated string, e.g. `"windows,2025,core"`). Set as the VM's tags in Proxmox
-    (`qm set --tags`), and — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the
-    `tags` on that NetBox IP address reservation, sent as `{"name": "<tag>"}` objects (NetBox
-    get-or-creates tags by name). Plain tag name strings are deliberately not used because NetBox
+  - `tags` (YAML list, or a comma-separated string such as `"windows,2025,core"`). Set as the VM's tags in Proxmox
+    (`qm set --tags`; Proxmox creates new tags on the fly), and — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the
+    `tags` on that NetBox IP address reservation, sent as `{"name": "<tag>"}` objects. NetBox only
+    looks up nested tags (it never creates them), so the role first creates any missing tag via
+    `/api/extras/tags/` (slug = lowercased name, non `[a-z0-9_-]` chars replaced with `-`). Plain tag name strings are deliberately not used because NetBox
     interprets a numeric-looking string (e.g. a year like `"2025"`) as a tag object ID lookup rather
     than a name, which fails for any tag that hasn't already been created with that numeric ID.
   - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects

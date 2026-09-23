@@ -104,21 +104,32 @@
     or ((vm_item.vlan is defined and vm_item.vlan | string | length > 0) and (('tag=' ~ (vm_item.vlan | string)) not in current_net0))
     or ((vm_item.vlan is not defined or vm_item.vlan | string | length == 0) and ('tag=' in current_net0))
 
+# vm_item.tags may be a YAML list or a comma/semicolon-separated string.
+# Proxmox stores tags ';'-separated in qm config, so split on any of , ; or whitespace.
 - name: Parse current tags from qm config
   set_fact:
     current_tags: >-
-      {{ ((qm_config.stdout | default('')) | regex_search('(?<=tags: ).*') | default('')).split(',') | map('trim') | select | list | sort }}
-    desired_tags: "{{ (vm_item.tags.split(',') | map('trim') | list | sort) if vm_item.tags is defined else [] }}"
+      {{ ((qm_config.stdout | default('')) | regex_search('(?<=tags: ).*') | default('', true))
+         | regex_findall('[^,;\s]+') | unique | sort }}
+    desired_tags: >-
+      {{ ((vm_item.tags | join(',')) if (vm_item.tags is defined and vm_item.tags is not string and vm_item.tags is iterable)
+          else (vm_item.tags | default('') | string))
+         | regex_findall('[^,;\s]+') | unique | sort }}
 
-- name: Set Proxmox VM tags (if defined and different)
+- name: Set Proxmox VM tags (if defined and different; qm creates missing tags)
   ansible.builtin.command:
-    cmd: qm set {{ desired_vmid }} --tags {{ vm_item.tags }}
+    argv:
+      - qm
+      - set
+      - "{{ desired_vmid }}"
+      - --tags
+      - "{{ desired_tags | join(';') }}"
   delegate_to: "{{ node_name }}"
   become: true
   register: tags_result
   changed_when: tags_result.rc == 0
   when:
-    - vm_item.tags is defined
+    - desired_tags | length > 0
     - current_tags != desired_tags
 
 - name: Parse current description/notes from qm config

@@ -34,7 +34,7 @@ provision_vms: []
 #   os_type: linux
 #   description: "Internal web server for team X"
 #   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP
-#   tags: "linux,web,team-x"  # applied to Proxmox tags, and to NetBox IP tags when NetBox allocates the IP
+#   tags: [linux, web, team-x]  # or "linux,web,team-x"; applied to Proxmox tags, and to NetBox IP tags when NetBox allocates the IP
 #   cores: 2
 #   memory: 2048
 #   disk_size: 20G
