@@ -25,6 +25,16 @@ netbox_allocate_ip: true
 netbox_ip_ranges_by_bridge: {}
 netbox_gateway_by_bridge: {}
 
+technitium_dns:
+  enabled: false
+  api_url: ""
+  api_port: 5380
+  api_token: ""
+  validate_certs: true
+  zone: ""
+  ttl: 3600
+  create_ptr_zone: true
+
 # Default vm list (empty) - real VM definitions should be placed in group_vars or host_vars
 provision_vms: []
 
@@ -47,5 +57,7 @@ provision_vms: []
 #     - 1.1.1.1
 #   search_domains:
 #     - example.com
+#   dns_zone: "example.com"  # overrides technitium_dns.zone for this VM
+#   dns_name: "web-01.example.com"  # optional; defaults to name + dns_zone
 #   ssh_authorized_keys:
 #     - "ssh-rsa AAAA... user@example"

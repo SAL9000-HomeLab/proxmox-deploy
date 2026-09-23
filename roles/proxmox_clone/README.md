@@ -21,6 +21,7 @@ Task layout (`tasks/`):
 - `configure.yml` — reconciles cores/memory, network/VLAN, tags, description, disk size
 - `cloudinit.yml` — renders/uploads the userdata snippet, allocates a NetBox IP if needed,
   reconciles cicustom/ipconfig/DNS
+- `technitium_dns.yml` — creates the VM's Technitium A and associated PTR records when enabled
 - `boot.yml` — starts the VM and waits for the guest to become reachable
 
 Usage:
