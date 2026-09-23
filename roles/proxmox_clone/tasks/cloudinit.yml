@@ -76,6 +76,19 @@
     fail_msg: >-
       NetBox IP allocation is enabled, but required NetBox API settings are missing.
 
+# Re-runs against an existing VM must keep the IP it was already given rather
+# than reserving a fresh one from NetBox each time.
+- name: Reuse IP already configured on the VM (ipconfig0)
+  set_fact:
+    existing_vm_ip: "{{ ((qm_config.stdout | default('') | regex_findall('(?m)^ipconfig0: .*?\\bip=([0-9.]+/[0-9]+)')) + ['']) | first }}"
+
+- name: Set allocated VM IP from existing VM config
+  set_fact:
+    resolved_vm_ip: "{{ existing_vm_ip }}"
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - existing_vm_ip | length > 0
+
 - name: Resolve NetBox IP range
   set_fact:
     netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] }}"
@@ -161,6 +174,7 @@
   when:
     - (vm_item.ip is not defined or vm_item.ip == "")
     - netbox_allocate_ip | default(true) | bool
+    - existing_vm_ip | length == 0
   run_once: false
 
 - name: Set final VM IP and gateway variables for later configuration
