@@ -3,9 +3,9 @@
 
 - name: Resolve Technitium DNS settings
   ansible.builtin.set_fact:
-    technitium_dns_resolved_api_url: "{{ (technitium_dns | default({})).api_url | default('') }}"
+    technitium_dns_resolved_api_url: "{{ (technitium_dns | default({})).api_url | default(technitium_dns_api_url | default('')) }}"
     technitium_dns_resolved_api_port: "{{ (technitium_dns | default({})).api_port | default(5380) | int }}"
-    technitium_dns_resolved_token: "{{ (technitium_dns | default({})).api_token | default('') }}"
+    technitium_dns_resolved_token: "{{ (technitium_dns | default({})).api_token | default((technitium_dns | default({})).token | default(technitium_dns_api_token | default(''))) }}"
     technitium_dns_resolved_zone: "{{ vm_item.dns_zone | default((technitium_dns | default({})).zone | default('')) }}"
     technitium_dns_resolved_validate_certs: "{{ (technitium_dns | default({})).validate_certs | default(true) | bool }}"
     technitium_dns_resolved_ttl: "{{ vm_item.dns_ttl | default((technitium_dns | default({})).ttl | default(3600)) | int }}"

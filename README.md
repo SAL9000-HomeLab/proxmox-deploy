@@ -55,10 +55,8 @@ proxmox:
 
 technitium_dns:
   enabled: true
-  api_url: "https://dns.example.com"
   api_port: 53443
-  api_token: "YOUR_API_TOKEN"
-  validate_certs: true
+  validate_certs: false
   zone: "lab.sal9000.tech"
   ttl: 3600
   create_ptr_zone: true
@@ -67,6 +65,9 @@ technitium_dns:
 When enabled, each VM creates an A record named `<name>.<zone>` and its associated
 PTR record. A VM can override the forward zone with `dns_zone`, or the full name with
 `dns_name`.
+
+For AWX, inject the credential as `technitium_dns_api_url` and
+`technitium_dns_api_token`. Keep the API token out of job extra vars.
 
 Windows VMs also require the domain-join variables (`domain_name`, `domain_join_ou`,
 `domain_admin_group`, `domain_join_user`, `domain_join_pass`) to be supplied as extra vars —
