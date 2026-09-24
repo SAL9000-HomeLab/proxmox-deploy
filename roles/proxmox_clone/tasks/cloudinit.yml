@@ -8,6 +8,7 @@
   ansible.builtin.template:
     src: "{{ 'windows-cloudbase-init-userdata.j2' if cloud_type == 'windows' else 'linux-user-data.j2' }}"
     dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
+    mode: '0600'  # Windows userdata embeds domain_join_pass
   delegate_to: localhost
   register: userdata_render
 
@@ -47,6 +48,13 @@
     mode: '0600'
   delegate_to: "{{ node_name }}"
   become: true
+  when: userdata_render is defined and userdata_render.dest is defined
+
+- name: Remove locally rendered userdata (may contain the domain-join password)
+  ansible.builtin.file:
+    path: "{{ userdata_render.dest }}"
+    state: absent
+  delegate_to: localhost
   when: userdata_render is defined and userdata_render.dest is defined
 
 - name: Resolve NetBox credential variables for this host
@@ -197,7 +205,7 @@
     that:
       - (vm_ip | length == 0) or ('/' in vm_ip)
     fail_msg: >-
-      vm_item.ip must include a CIDR prefix length, e.g. "10.100.30.25/24" — got "{{ vm_ip }}".
+      vm_item.ip must include a CIDR prefix length, e.g. "10.0.30.25/24" — got "{{ vm_ip }}".
   when: vm_ip is defined
 
 - name: Decide whether to update cicustom/ipconfig/DNS for VM

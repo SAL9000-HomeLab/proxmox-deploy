@@ -1,4 +1,4 @@
-# deploy-template
+# proxmox-deploy
 
 This repository deploys VMs (Linux or Windows) to a Proxmox cluster by cloning a template over
 SSH (`qm`), optionally reserving an IP from NetBox, and applying cloud-init/cloudbase-init. All
@@ -6,6 +6,11 @@ of the actual logic lives in the `proxmox_clone` role — see
 [roles/proxmox_clone/README.md](roles/proxmox_clone/README.md) for the full variable reference.
 
 Use `site.yml` from AWX and pass VM definitions through job extra vars.
+
+The values committed in `inventory/` and `group_vars/` (`example.com`, `10.0.x.x`, the
+`pve01` node, NetBox range IDs) are placeholders. Supply your real environment through your
+AWX inventory and job extra vars, or local files that are gitignored (`local/`,
+`extra-vars*.yml`). Never commit credentials.
 
 ## Template catalog contract
 
@@ -29,19 +34,19 @@ Example AWX extra vars:
 provision_vms:
   - name: rocky10-web-01
     template: tpl-rocky-10
-    template_vmid: 9003
-    node: pve01.lab.sal9000.tech
+    template_vmid: 10001
+    node: pve01.lab.example.com
     vmid: 3101
     disk_target: scsi0
     os_type: linux
     net_bridge: vnet30
-    ip: 10.100.30.11/24
-    gateway: 10.100.30.1
+    ip: 10.0.30.11/24
+    gateway: 10.0.30.1
     dns_servers:
-      - 10.100.30.101
-      - 10.100.30.111
+      - 10.0.30.101
+      - 10.0.30.111
     search_domains:
-      - lab.sal9000.tech
+      - lab.example.com
     cores: 2
     memory: 4096
     disk_size: 40G
@@ -57,7 +62,7 @@ technitium_dns:
   enabled: true
   api_port: 53443
   validate_certs: false
-  zone: "lab.sal9000.tech"
+  zone: "lab.example.com"
   ttl: 3600
   create_ptr_zone: true
 ```

@@ -3,7 +3,7 @@
 
 # High-level defaults used by the role (non-sensitive)
 proxmox_defaults:
-  node: pve01.lab.sal9000.tech
+  node: pve01.lab.example.com
   storage: nfs_ssd
   snippets_dir: /var/lib/vz/snippets
   disk_target: scsi0
@@ -43,7 +43,7 @@ provision_vms: []
 #   template_vmid: 9000
 #   linked_clone: false  # default; true = linked clone on the template's storage
 #   vmid: null
-#   node: pve01.lab.sal9000.tech
+#   node: pve01.lab.example.com
 #   os_type: linux
 #   description: "Internal web server for team X"
 #   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP
