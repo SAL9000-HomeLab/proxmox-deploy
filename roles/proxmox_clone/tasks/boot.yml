@@ -23,10 +23,11 @@
   when: "'status: running' not in qm_status.stdout"
 
 - name: Wait for guest to accept connections (linux => SSH, windows => WinRM)
+  when: vm_ip is defined and vm_ip | length > 0
   block:
     - name: Wait for TCP port for guest (linux:22 windows:5985/5986)
       ansible.builtin.wait_for:
-        host: "{{ vm_ip | regex_replace('/\\d+$','') }}"
+        host: "{{ vm_ip | regex_replace('/\\d+$', '') }}"
         port: "{{ 5986 if vm_item.winrm_ssl | default(False) else (5985 if cloud_type == 'windows' else 22) }}"
         timeout: "{{ proxmox_clone_wait.service_timeout | default(600) }}"
         state: started
@@ -47,16 +48,17 @@
 
         - name: Check Windows using winrm (win_ping) - requires pywinrm & connection
           ansible.builtin.debug:
-            msg: "WinRM reachable on {{ resolved_vm_ip | regex_replace('/\\d+$','') }} (win_ping should be executed by a follow-up Windows play with connection: winrm)"
+            msg: >-
+              WinRM reachable on {{ resolved_vm_ip | regex_replace('/\d+$', '') }}
+              (win_ping should be executed by a follow-up Windows play with connection: winrm)
           when: cloud_type == 'windows'
       rescue:
         - name: Warn that service check failed
           ansible.builtin.debug:
             msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ desired_vmid }})."
-  when: vm_ip is defined and vm_ip | length > 0
 
 # Bump next_vmid if auto-calculated
-- name: Bump next_vmid if we autocalculated
-  set_fact:
+- name: Bump next_vmid if we auto-calculated
+  ansible.builtin.set_fact:
     next_vmid: "{{ next_vmid | int + 1 }}"
   when: vm_item.vmid is not defined or (vm_item.vmid | int) == 0

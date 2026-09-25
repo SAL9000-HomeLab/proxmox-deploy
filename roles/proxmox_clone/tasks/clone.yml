@@ -5,6 +5,7 @@
 # Expects vm_item loop variable and facts from resolve_vars.yml.
 
 - name: Clone template into new VMID (when not exists) using qm (full vs linked)
+  when: not target_exists
   block:
     - name: Clone (full clone path)
       ansible.builtin.command:
@@ -16,7 +17,9 @@
       delegate_to: "{{ node_name }}"
       become: true
       register: qm_clone_full
-      changed_when: qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower) or 'created' in (qm_clone_full.stdout | lower))
+      changed_when: >-
+        qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower)
+        or 'created' in (qm_clone_full.stdout | lower))
       failed_when: qm_clone_full.rc != 0 and ('already exists' not in (qm_clone_full.stderr | default('')) )
       when:
         - not target_exists
@@ -32,13 +35,13 @@
       delegate_to: "{{ node_name }}"
       become: true
       register: qm_clone_linked
-      changed_when: qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower) or 'created' in (qm_clone_linked.stdout | lower))
+      changed_when: >-
+        qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower)
+        or 'created' in (qm_clone_linked.stdout | lower))
       failed_when: qm_clone_linked.rc != 0 and ('already exists' not in (qm_clone_linked.stderr | default('')) )
       when:
         - not target_exists
         - use_linked_clone | bool
-
-  when: not target_exists
 
 - name: Gather VM config after ensure (qm config)
   ansible.builtin.command:
