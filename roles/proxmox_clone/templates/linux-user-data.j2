@@ -7,23 +7,17 @@ timezone: UTC
 
 ssh_pwauth: false
 
-{% if vm_item.ssh_authorized_keys is defined %}
-ssh_authorized_keys:
-{% for key in vm_item.ssh_authorized_keys %}
-  - {{ key }}
-{% endfor %}
-{% endif %}
-
+# The template's build account is locked with no key; this makes it (or a
+# new user, if linux_admin_user is changed) the key-only admin login.
 users:
-  - name: root
-    lock_passwd: false
+  - name: {{ linux_admin_user | default('ansible') | to_json }}
     shell: /bin/bash
-    {% if vm_item.ssh_authorized_keys is defined %}
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
-    {% for key in vm_item.ssh_authorized_keys %}
-      - {{ key }}
-    {% endfor %}
-    {% endif %}
+{% for key in linux_admin_keys_resolved %}
+      - {{ key | to_json }}
+{% endfor %}
 
 package_update: true
 packages:

@@ -1,0 +1,142 @@
+# group_vars/proxmox.yml
+# AWX-friendly sample vars file for site.yml.
+#
+# Use AWX extra vars for job-driven provisioning, e.g.:
+#   provision_vms: "@vm_list.yml"
+#   proxmox:
+#     storage: nfs_ssd
+#     net_bridge: vmbr0
+#   proxmox_creds_file: "/path/to/proxmox_creds.yml"
+#   domain_join_file: "/path/to/domain_join.yml"
+#
+# Leave this file enabled if you want fallback defaults for AWX or local execution.
+
+proxmox:
+  # Default node — used if per-VM node is not set. Must match your inventory host name.
+  node: pve01.lab.sal9000.tech
+  storage: nfs_ssd                   # storage name where clones should be created
+  net_bridge: vnet30
+  timeout: 300
+
+netbox_allocate_ip: true
+netbox_ip_ranges_by_bridge:
+  vnet20: 3
+  vnet30: 19
+  vnet40: 20
+  vnet150: 21
+netbox_gateway_by_bridge:
+  vnet20: 10.100.20.1
+  vnet30: 10.100.30.1
+  vnet40: 10.100.40.1
+  vnet150: 10.100.150.1
+
+technitium_dns:
+  enabled: false
+  api_url: "https://dns.example.com"
+  api_port: 53443
+  api_token: ""
+  validate_certs: true
+  zone: "lab.sal9000.tech"
+  ttl: 3600
+  create_ptr_zone: true
+
+# Canonical template catalog.
+# The template names here must match the names created in the vm-templates repo.
+template_catalog:
+  rocky9: tpl-rocky-9
+  rocky10: tpl-rocky-10
+  ubuntu2404: tpl-ubuntu-2404
+  windows2025_core: tpl-windows-server-2025-core
+  windows2025_desktop: tpl-windows-server-2025-desktop
+
+# Example deployment inventory.
+# The template field references a golden image built by vm-templates.
+# Instance-specific values such as name, ip, dns, and gateway are applied here.
+provision_vms:
+  - name: rocky10-web-01
+    template: tpl-rocky-10
+    template_vmid: 9003
+    vmid: 3101
+    node: pve01.lab.sal9000.tech
+    os_type: linux
+    net_bridge: vnet30
+    ip: 10.100.30.11/24
+    gateway: 10.100.30.1
+    dns_servers:
+      - 10.100.30.101
+      - 10.100.30.111
+    search_domains:
+      - lab.sal9000.tech
+    cores: 2
+    memory: 4096
+    disk_size: 40G
+    tags:
+      - rocky
+      - linux
+      - web
+
+  - name: rocky10-db-01
+    template: tpl-rocky-10
+    template_vmid: 9003
+    vmid: 3102
+    node: pve01.lab.sal9000.tech
+    os_type: linux
+    net_bridge: vnet30
+    ip: 10.100.30.12/24
+    gateway: 10.100.30.1
+    dns_servers:
+      - 10.100.30.101
+      - 10.100.30.111
+    search_domains:
+      - lab.sal9000.tech
+    cores: 4
+    memory: 8192
+    disk_size: 80G
+    tags:
+      - rocky
+      - linux
+      - database
+
+# Optional AWX credential file paths used by site.yml:
+# proxmox_creds_file: "~/ansible-secrets/proxmox/proxmox_creds.yml"
+# domain_join_file: "~/ansible-secrets/windows/domain_join.yml"
+
+# Example VM provisioning list. In AWX, override this with extra vars.
+# provision_vms:
+#   - name: W25C-LABDC006
+#     template_vmid: 9001
+#     node: pve01.lab.sal9000.tech
+#     vmid: 3026
+#     disk_target: scsi0
+#     os_type: windows
+#     net_bridge: vlan30
+#     ip: 10.100.30.12/24
+#     gateway: 10.100.30.1
+#     dns_servers:
+#       - 10.100.30.101
+#       - 10.100.30.111
+#     search_domains:
+#       - lab.sal9000.tech
+#     cores: 4
+#     memory: 8192
+#     disk_size: 100G
+#     tags: "windows,2025,core"
+#
+#   - name: W25G-TEST001
+#     template_vmid: 9002
+#     node: pve01.lab.sal9000.tech
+#     vmid: 3002
+#     disk_target: scsi0
+#     os_type: windows
+#     hostname: W25G-TEST001.lab.sal9000.tech
+#     ip: 10.100.30.202/24
+#     gateway: 10.100.30.1
+#     dns_servers:
+#       - 10.100.30.101
+#       - 10.100.30.111
+#     search_domains:
+#       - lab.sal9000.tech
+#     cores: 4
+#     memory: 8192
+#     disk_size: 60G
+#     tags: "windows,2025,gui,ansible-test"

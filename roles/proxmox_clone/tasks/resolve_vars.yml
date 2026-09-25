@@ -96,3 +96,22 @@
       - desired_vmid is defined
       - (desired_vmid | int) > 0
     fail_msg: "desired_vmid is missing or invalid ({{ desired_vmid }}). qm nextid output: {{ qm_nextid_raw.stdout | default('') }}"
+
+- name: Resolve SSH keys for the Linux admin user (role-wide + per-VM)
+  set_fact:
+    linux_admin_keys_resolved: >-
+      {{ ((linux_admin_ssh_keys | default([]))
+          + (vm_item.ssh_authorized_keys | default([])))
+         | map('trim') | select | unique | list }}
+  when: cloud_type == 'linux'
+
+# Templates lock the build account and disable password SSH, so a Linux VM
+# with no keys would boot with no way to log in. Fail before cloning.
+- name: Assert the Linux VM will get at least one SSH key
+  assert:
+    that:
+      - linux_admin_keys_resolved | length > 0
+    fail_msg: >-
+      No SSH keys for {{ vm_name }}: set linux_admin_ssh_keys (role-wide, e.g. in AWX)
+      or ssh_authorized_keys on the VM. Without one, nobody can log in to it.
+  when: cloud_type == 'linux'

@@ -35,13 +35,6 @@ technitium_dns:
   ttl: 3600
   create_ptr_zone: true
 
-# Admin account cloud-init sets up on Linux VMs. The vm-templates images ship
-# this user with its password locked and no SSH key, so these keys are the
-# only way in. Set linux_admin_ssh_keys once (e.g. in AWX); a VM's own
-# ssh_authorized_keys are added on top.
-linux_admin_user: ansible
-linux_admin_ssh_keys: []
-
 # Default vm list (empty) - real VM definitions should be placed in group_vars or host_vars
 provision_vms: []
 

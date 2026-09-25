@@ -69,6 +69,10 @@ PTR record. A VM can override the forward zone with `dns_zone`, or the full name
 For AWX, inject the credential as `technitium_dns_api_url` and
 `technitium_dns_api_token`. Keep the API token out of job extra vars.
 
+Linux VMs need at least one SSH public key, because the templates have no usable password.
+Set `linux_admin_ssh_keys` once (e.g. in AWX) and/or `ssh_authorized_keys` per VM. They're
+installed for `linux_admin_user` (default `ansible`), which gets passwordless sudo.
+
 Windows VMs also require the domain-join variables (`domain_name`, `domain_join_ou`,
 `domain_admin_group`, `domain_join_user`, `domain_join_pass`) to be supplied as extra vars —
 `site.yml` doesn't load a credentials file for these today, so they need to come from an AWX
