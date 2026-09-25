@@ -1,5 +1,5 @@
 ---
-- name: Deploy Windows VMs from templates (SSH/qm flow)
+- name: Deploy Linux and Windows VMs from Proxmox templates (SSH/qm flow)
   hosts: proxmox
   gather_facts: false
   roles:

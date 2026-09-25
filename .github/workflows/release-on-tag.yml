@@ -28,7 +28,7 @@ jobs:
       - name: Extract changelog section for this version
         run: |
           VERSION="${{ steps.ver.outputs.version }}"
-          CHANGELOG="roles/defos/CHANGELOG.md"
+          CHANGELOG="CHANGELOG.md"
           RELEASE_NOTES="release_notes.md"
           # Ensure file exists
           if [ ! -f "$CHANGELOG" ]; then
@@ -55,7 +55,7 @@ jobs:
           fi
           echo "Release notes prepared in $RELEASE_NOTES"
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}

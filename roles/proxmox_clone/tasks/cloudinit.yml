@@ -8,6 +8,7 @@
   ansible.builtin.template:
     src: "{{ 'windows-cloudbase-init-userdata.j2' if cloud_type == 'windows' else 'linux-user-data.j2' }}"
     dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
+    mode: '0600'  # Windows userdata embeds domain_join_pass
   delegate_to: localhost
   register: userdata_render
 
@@ -15,12 +16,12 @@
   set_fact:
     _proxmox_snippets_raw: >-
       {{ (
-           (proxmox.snippets_dir if (proxmox is defined and proxmox is mapping and 'snippets_dir' in proxmox) else
+          (proxmox.snippets_dir if (proxmox is defined and proxmox is mapping and 'snippets_dir' in proxmox) else
             (proxmox_defaults.snippets_dir if (proxmox_defaults is defined and proxmox_defaults is mapping and 'snippets_dir' in proxmox_defaults) else
-             '/var/lib/vz/snippets'
+            '/var/lib/vz/snippets'
             )
-           )
-         ) }}
+          )
+        ) }}
   run_once: false
 
 - name: Normalize snippets_dir_resolved (force leading slash, collapse doubles)
@@ -47,6 +48,13 @@
     mode: '0600'
   delegate_to: "{{ node_name }}"
   become: true
+  when: userdata_render is defined and userdata_render.dest is defined
+
+- name: Remove locally rendered userdata (may contain the domain-join password)
+  ansible.builtin.file:
+    path: "{{ userdata_render.dest }}"
+    state: absent
+  delegate_to: localhost
   when: userdata_render is defined and userdata_render.dest is defined
 
 - name: Resolve NetBox credential variables for this host
@@ -181,12 +189,12 @@
   set_fact:
     vm_ip: >-
       {{ vm_item.ip
-         if (vm_item.ip is defined and vm_item.ip | length > 0)
-         else (resolved_vm_ip | default('')) }}
+        if (vm_item.ip is defined and vm_item.ip | length > 0)
+        else (resolved_vm_ip | default('')) }}
     vm_gateway: >-
       {{ vm_item.gateway
-         if (vm_item.gateway is defined and vm_item.gateway | length > 0)
-         else (netbox_gateway_by_bridge[net_bridge_resolved] | default('')) }}
+        if (vm_item.gateway is defined and vm_item.gateway | length > 0)
+        else (netbox_gateway_by_bridge[net_bridge_resolved] | default('')) }}
     vm_ip_address: >-
       {{ (vm_item.ip if (vm_item.ip is defined and vm_item.ip | length > 0)
           else (resolved_vm_ip | default(''))) | regex_replace('/.*$', '') }}
@@ -197,7 +205,7 @@
     that:
       - (vm_ip | length == 0) or ('/' in vm_ip)
     fail_msg: >-
-      vm_item.ip must include a CIDR prefix length, e.g. "10.100.30.25/24" — got "{{ vm_ip }}".
+      vm_item.ip must include a CIDR prefix length, e.g. "10.0.30.25/24" — got "{{ vm_ip }}".
   when: vm_ip is defined
 
 - name: Decide whether to update cicustom/ipconfig/DNS for VM
@@ -237,9 +245,9 @@
         +
         (
           ['--ipconfig0',
-           'ip=' ~ vm_ip ~ (
-             (vm_gateway is defined and vm_gateway | length > 0) and (',gw=' ~ vm_gateway) or ''
-           )
+          'ip=' ~ vm_ip ~ (
+            (vm_gateway is defined and vm_gateway | length > 0) and (',gw=' ~ vm_gateway) or ''
+          )
           ] if (vm_ip is defined and vm_ip | length > 0) else []
         )
         +

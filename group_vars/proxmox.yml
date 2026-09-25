@@ -13,7 +13,7 @@
 
 proxmox:
   # Default node — used if per-VM node is not set. Must match your inventory host name.
-  node: pve01.lab.sal9000.tech
+  node: pve01.lab.example.com
   storage: nfs_ssd                   # storage name where clones should be created
   net_bridge: vnet30
   timeout: 300
@@ -25,10 +25,10 @@ netbox_ip_ranges_by_bridge:
   vnet40: 20
   vnet150: 21
 netbox_gateway_by_bridge:
-  vnet20: 10.100.20.1
-  vnet30: 10.100.30.1
-  vnet40: 10.100.40.1
-  vnet150: 10.100.150.1
+  vnet20: 10.0.20.1
+  vnet30: 10.0.30.1
+  vnet40: 10.0.40.1
+  vnet150: 10.0.150.1
 
 technitium_dns:
   enabled: false
@@ -36,7 +36,7 @@ technitium_dns:
   api_port: 53443
   api_token: ""
   validate_certs: true
-  zone: "lab.sal9000.tech"
+  zone: "lab.example.com"
   ttl: 3600
   create_ptr_zone: true
 
@@ -55,18 +55,18 @@ template_catalog:
 provision_vms:
   - name: rocky10-web-01
     template: tpl-rocky-10
-    template_vmid: 9003
+    template_vmid: 10001
     vmid: 3101
-    node: pve01.lab.sal9000.tech
+    node: pve01.lab.example.com
     os_type: linux
     net_bridge: vnet30
-    ip: 10.100.30.11/24
-    gateway: 10.100.30.1
+    ip: 10.0.30.11/24
+    gateway: 10.0.30.1
     dns_servers:
-      - 10.100.30.101
-      - 10.100.30.111
+      - 10.0.30.101
+      - 10.0.30.111
     search_domains:
-      - lab.sal9000.tech
+      - lab.example.com
     cores: 2
     memory: 4096
     disk_size: 40G
@@ -77,18 +77,18 @@ provision_vms:
 
   - name: rocky10-db-01
     template: tpl-rocky-10
-    template_vmid: 9003
+    template_vmid: 10001
     vmid: 3102
-    node: pve01.lab.sal9000.tech
+    node: pve01.lab.example.com
     os_type: linux
     net_bridge: vnet30
-    ip: 10.100.30.12/24
-    gateway: 10.100.30.1
+    ip: 10.0.30.12/24
+    gateway: 10.0.30.1
     dns_servers:
-      - 10.100.30.101
-      - 10.100.30.111
+      - 10.0.30.101
+      - 10.0.30.111
     search_domains:
-      - lab.sal9000.tech
+      - lab.example.com
     cores: 4
     memory: 8192
     disk_size: 80G
@@ -103,39 +103,39 @@ provision_vms:
 
 # Example VM provisioning list. In AWX, override this with extra vars.
 # provision_vms:
-#   - name: W25C-LABDC006
-#     template_vmid: 9001
-#     node: pve01.lab.sal9000.tech
+#   - name: W25C-TEST002
+#     template_vmid: 9002
+#     node: pve01.lab.example.com
 #     vmid: 3026
 #     disk_target: scsi0
 #     os_type: windows
-#     net_bridge: vlan30
-#     ip: 10.100.30.12/24
-#     gateway: 10.100.30.1
+#     net_bridge: vnet30
+#     ip: 10.0.30.12/24
+#     gateway: 10.0.30.1
 #     dns_servers:
-#       - 10.100.30.101
-#       - 10.100.30.111
+#       - 10.0.30.101
+#       - 10.0.30.111
 #     search_domains:
-#       - lab.sal9000.tech
+#       - lab.example.com
 #     cores: 4
 #     memory: 8192
 #     disk_size: 100G
 #     tags: "windows,2025,core"
 #
 #   - name: W25G-TEST001
-#     template_vmid: 9002
-#     node: pve01.lab.sal9000.tech
+#     template_vmid: 9003
+#     node: pve01.lab.example.com
 #     vmid: 3002
 #     disk_target: scsi0
 #     os_type: windows
-#     hostname: W25G-TEST001.lab.sal9000.tech
-#     ip: 10.100.30.202/24
-#     gateway: 10.100.30.1
+#     hostname: W25G-TEST001.lab.example.com
+#     ip: 10.0.30.202/24
+#     gateway: 10.0.30.1
 #     dns_servers:
-#       - 10.100.30.101
-#       - 10.100.30.111
+#       - 10.0.30.101
+#       - 10.0.30.111
 #     search_domains:
-#       - lab.sal9000.tech
+#       - lab.example.com
 #     cores: 4
 #     memory: 8192
 #     disk_size: 60G

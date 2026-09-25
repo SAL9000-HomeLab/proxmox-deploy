@@ -46,7 +46,7 @@ Variable reference:
     `/api/extras/tags/` (slug = lowercased name, non `[a-z0-9_-]` chars replaced with `-`). Plain tag name strings are deliberately not used because NetBox
     interprets a numeric-looking string (e.g. a year like `"2025"`) as a tag object ID lookup rather
     than a name, which fails for any tag that hasn't already been created with that numeric ID.
-  - `ip` (must include a CIDR prefix, e.g. `10.100.30.25/24` — Proxmox's `ipconfig0` rejects
+  - `ip` (must include a CIDR prefix, e.g. `10.0.30.25/24` — Proxmox's `ipconfig0` rejects
     a bare IP), `gateway`, `dns_servers` (list), `search_domains` (list), `hostname`,
     `ssh_authorized_keys` (list, Linux only today — see Templates note below), `winrm_ssl`.
   - `linked_clone`: `true` for a linked clone, `false` (default) for a full clone. Falls back to
@@ -105,21 +105,21 @@ AWX example:
 provision_vms:
   - name: W25C-TEST001
     description: "test vm deployment"
-    domain: "lab.sal9000.tech"
-    template_vmid: 9001
-    node: pve01.lab.sal9000.tech
+    domain: "lab.example.com"
+    template_vmid: 9002
+    node: pve01.lab.example.com
     vmid: 3021
     disk_target: scsi0
     os_type: windows
     net_bridge: vnet30
-    # ip: 10.100.30.25/24
-    # gateway: 10.100.30.1
+    # ip: 10.0.30.25/24
+    # gateway: 10.0.30.1
     dns_servers:
-      - 10.100.30.101
-      - 10.100.30.111
+      - 10.0.30.101
+      - 10.0.30.111
     search_domains:
-      - lab.sal9000.tech
-      - ds.sal9000.tech
+      - lab.example.com
+      - ad.example.com
     cores: 4
     memory: 8192
     disk_size: 100G
@@ -144,7 +144,7 @@ netbox_allocate_ip: true
 netbox_ip_ranges_by_bridge:
   vnet30: 19
 netbox_gateway_by_bridge:
-  vnet30: 10.100.30.1
+  vnet30: 10.0.30.1
 netbox:
   api_url: "https://netbox.example.local"
   token: "YOUR_NETBOX_TOKEN"
