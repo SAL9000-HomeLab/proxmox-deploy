@@ -3,6 +3,7 @@
 Purpose: clone VMs from Proxmox templates using SSH (`qm`) and cloud-init/cloudbase-init snippets.
 
 Features:
+
 - SSH-based flow (no Proxmox API required)
 - Auto-allocates a vmid via `qm nextid` when `vmid` isn't supplied
 - Idempotent: reconciles cores/memory, network bridge/VLAN, tags, description/notes,
@@ -14,6 +15,7 @@ Features:
 - Uses Jinja2 templates for cloud-init and cloudbase-init userdata
 
 Task layout (`tasks/`):
+
 - `main.yml` — merges `proxmox_defaults`, validates `provision_vms`, loops per VM
 - `provision_vm.yml` — thin orchestrator, imports the files below in order
 - `resolve_vars.yml` — resolves per-VM settings and the target vmid
@@ -25,11 +27,13 @@ Task layout (`tasks/`):
 - `boot.yml` — starts the VM and waits for the guest to become reachable
 
 Usage:
+
 - Pass `provision_vms` via AWX extra vars, inventory group vars, host_vars, or `group_vars/proxmox.yml`.
 - Ensure inventory contains the Proxmox node and `ansible_python_interpreter` set.
 - Run the role from a play that targets `proxmox` hosts.
 
 Variable reference:
+
 - `provision_vms`: list of VM objects.
   - `name` (required), `template_vmid` (required), `vmid` (optional — auto-allocated via
     `qm nextid` when omitted or `0`), `node` (optional, falls back to `proxmox.node` /
@@ -39,13 +43,15 @@ Variable reference:
     `memory` (default 2048), `disk_size` (e.g. `100G` — only grows the disk, never shrinks; also
     applied to existing VMs). If `disk_target` isn't a disk on the VM, the boot disk is resized instead
     (with a warning).
-  - `tags` (YAML list, or a comma-separated string such as `"windows,2025,core"`). Set as the VM's tags in Proxmox
-    (`qm set --tags`; Proxmox creates new tags on the fly), and — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the
-    `tags` on that NetBox IP address reservation, sent as `{"name": "<tag>"}` objects. NetBox only
-    looks up nested tags (it never creates them), so the role first creates any missing tag via
-    `/api/extras/tags/` (slug = lowercased name, non `[a-z0-9_-]` chars replaced with `-`). Plain tag name strings are deliberately not used because NetBox
-    interprets a numeric-looking string (e.g. a year like `"2025"`) as a tag object ID lookup rather
-    than a name, which fails for any tag that hasn't already been created with that numeric ID.
+  - `tags` (YAML list, or a comma-separated string such as `"windows,2025,core"`). Set as the VM's
+    tags in Proxmox (`qm set --tags`; Proxmox creates new tags on the fly), and — only when NetBox
+    allocates the IP (i.e. `ip` isn't supplied) — as the `tags` on that NetBox IP address
+    reservation, sent as `{"name": "<tag>"}` objects. NetBox only looks up nested tags (it never
+    creates them), so the role first creates any missing tag via `/api/extras/tags/` (slug =
+    lowercased name, non `[a-z0-9_-]` chars replaced with `-`). Plain tag name strings are
+    deliberately not used because NetBox interprets a numeric-looking string (e.g. a year like
+    `"2025"`) as a tag object ID lookup rather than a name, which fails for any tag that hasn't
+    already been created with that numeric ID.
   - `ip` (must include a CIDR prefix, e.g. `10.0.30.25/24` — Proxmox's `ipconfig0` rejects
     a bare IP), `gateway`, `dns_servers` (list), `search_domains` (list), `hostname`,
     `ssh_authorized_keys` (list, Linux only today — added to `linux_admin_user` on top of
@@ -86,7 +92,8 @@ Variable reference:
   `boot.yml` — `service_timeout` (seconds, default `600`) and `poll_interval` (seconds,
   default `5`). No default is defined for this variable.
 - NetBox auto-allocation variables.
-  - `netbox_allocate_ip`: true/false to enable NetBox allocation when `ip` is not supplied. If you want DHCP instead, set this to `false`.
+  - `netbox_allocate_ip`: true/false to enable NetBox allocation when `ip` is not supplied. If you
+    want DHCP instead, set this to `false`.
   - `netbox_ip_ranges_by_bridge`: mapping from `net_bridge` to the NetBox IP range ID to allocate from.
   - `netbox_gateway_by_bridge`: mapping from `net_bridge` to the default gateway for that subnet.
   - `netbox`: API connection settings with `api_url`, `token`, and optional `ssl_verify`
@@ -100,6 +107,7 @@ Variable reference:
   job) — `site.yml` does not load a credentials file for these.
 
 Templates:
+
 - `templates/linux-user-data.j2` and `templates/windows-cloudbase-init-userdata.j2` are the only
   two templates actually rendered (selected by `os_type` in `cloudinit.yml`).
 - `templates/ref.j2` is an inactive reference/scratch template (not selected by any task) sketching
@@ -107,6 +115,7 @@ Templates:
   `ntp_servers`, Windows `ssh_authorized_keys`). None of those fields currently have any effect.
 
 AWX example:
+
 ```yaml
 provision_vms:
   - name: W25C-TEST001
@@ -136,6 +145,7 @@ proxmox:
 ```
 
 Playbook usage:
+
 ```yaml
 - hosts: proxmox
   roles:
@@ -145,6 +155,7 @@ Playbook usage:
 ```
 
 NetBox mapping example:
+
 ```yaml
 netbox_allocate_ip: true
 netbox_ip_ranges_by_bridge:
@@ -158,5 +169,6 @@ netbox:
 ```
 
 Dependencies:
+
 - Control host: none strictly required for the SSH flow (but you may want `pywinrm` if you plan to run Windows modules later)
 - Proxmox node: `qm` CLI must be available and accessible via SSH
