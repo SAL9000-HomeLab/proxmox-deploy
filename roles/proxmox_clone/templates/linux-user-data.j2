@@ -37,14 +37,11 @@ runcmd:
 write_files:
   - path: /etc/resolv.conf
     content: |
-      {% if vm_item.dns_servers is defined %}
-      {% for ns in vm_item.dns_servers %}
+{# Block tags sit at column 0 so trim_blocks leaves no stray indentation in the file. #}
+{% for ns in (vm_item.dns_servers if vm_item.dns_servers is defined else [vm_item.dns]) %}
       nameserver {{ ns }}
-      {% endfor %}
-      {% else %}
-      nameserver {{ vm_item.dns }}
-      {% endif %}
-      {% if vm_item.search_domains is defined %}
+{% endfor %}
+{% if vm_item.search_domains is defined %}
       search {{ vm_item.search_domains | join(' ') }}
-      {% endif %}
+{% endif %}
 {% endif %}
