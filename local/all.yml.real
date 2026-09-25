@@ -1,0 +1,8 @@
+---
+domain_name: "ds.sal9000.tech"
+
+# OU where the VM should be created
+domain_join_ou: "OU=Build,OU=Servers,OU=Resources,DC=ds,DC=sal9000,DC=tech"
+
+# Local admin group to add the domain group to (e.g. "Administrators")
+domain_admin_group: "SAL9000\\ServerAdmins"

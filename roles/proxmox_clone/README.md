@@ -48,7 +48,8 @@ Variable reference:
     than a name, which fails for any tag that hasn't already been created with that numeric ID.
   - `ip` (must include a CIDR prefix, e.g. `10.0.30.25/24` — Proxmox's `ipconfig0` rejects
     a bare IP), `gateway`, `dns_servers` (list), `search_domains` (list), `hostname`,
-    `ssh_authorized_keys` (list, Linux only today — see Templates note below), `winrm_ssl`.
+    `ssh_authorized_keys` (list, Linux only today — added to `linux_admin_user` on top of
+    `linux_admin_ssh_keys`; see Templates note below), `winrm_ssl`.
   - `linked_clone`: `true` for a linked clone, `false` (default) for a full clone. Falls back to
     `proxmox_clone_behavior.linked_clone`, then `proxmox.linked_clone`, then `false`. Linked
     clones share the template's base disk: they're created on the template's storage (the
@@ -68,6 +69,11 @@ Variable reference:
   - `dns`: Linux only — a single nameserver string, used as a fallback in
     `templates/linux-user-data.j2` when `dns_servers` isn't set. Doesn't affect the Proxmox
     `--nameserver` config (which only reads `dns_servers`).
+- `linux_admin_user` (default `ansible`) and `linux_admin_ssh_keys` (default `[]`): the account
+  cloud-init sets up on Linux VMs, with passwordless sudo, a locked password, and these keys plus
+  the VM's own `ssh_authorized_keys`. The vm-templates images ship this user locked with no key
+  and SSH password auth off, so these keys are the only way in: the play fails before cloning a
+  Linux VM that would get none. Set `linux_admin_ssh_keys` once (e.g. AWX extra vars or inventory).
 - `proxmox`: role-level defaults (merged with `proxmox_defaults`).
   - `node`, `storage`, `snippets_dir`, `net_bridge`, `net_model`, `vlan`, `disk_target`,
     `linked_clone` (legacy `full_clone`), `cpu`, `memory`.
