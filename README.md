@@ -87,17 +87,26 @@ credential injected into the job (or `-e` on the CLI). `domain_name`, `domain_jo
 
 ## Development and CI
 
-Every push to `main` and every pull request runs the shared
-[`ansible-ci` workflow](https://github.com/SAL9000-HomeLab/shared-actions/blob/main/.github/workflows/ansible-ci.yml)
-(`.github/workflows/ansible-ci.yml`), which checks:
+Two workflows call reusable workflows from
+[`SAL9000-HomeLab/shared-actions`](https://github.com/SAL9000-HomeLab/shared-actions):
 
-- `yamllint` using [`.yamllint`](.yamllint): the default rules with 120-column lines, matching
-  the editor ruler in `.vscode/settings.json`.
-- `ansible-playbook --syntax-check` on `site.yml`.
-- `ansible-lint` using [`.ansible-lint`](.ansible-lint). The only rule skipped is
-  `var-naming[no-role-prefix]`: the role's variables (`provision_vms`, `proxmox`, `netbox`,
-  `technitium_dns`, `linux_admin_*`, …) are set by AWX job templates and inventories, so
-  prefixing them with `proxmox_clone_` would break existing callers.
+- **Ansible CI** (`.github/workflows/ansible-ci.yml`), on pushes to `main` and every pull request:
+  - `yamllint`, then `ansible-playbook --syntax-check` on `site.yml`.
+  - `ansible-lint` using [`.ansible-lint`](.ansible-lint). The only rule skipped is
+    `var-naming[no-role-prefix]`: the role's variables (`provision_vms`, `proxmox`, `netbox`,
+    `technitium_dns`, `linux_admin_*`, …) are set by AWX job templates and inventories, so
+    prefixing them with `proxmox_clone_` would break existing callers.
+- **Linting Validation** (`.github/workflows/ci.yml`), on pull requests to `main`:
+  - Markdown lint (`markdownlint-cli2`) using [`.markdownlint.json`](.markdownlint.json):
+    120-column lines (code blocks and tables exempt), `_emphasis_` and `**strong**`.
+  - Link check (linkspector) using [`.linkspector.yml`](.linkspector.yml). Findings are
+    reported on the pull request. Links to this org's GitHub repos are skipped.
+  - `yamllint` again, standalone.
+
+Both YAML checks read [`.yamllint.yml`](.yamllint.yml): the default rules with 120-column
+lines (matching the editor ruler in `.vscode/settings.json`), with truthy checks skipped for
+GitHub workflows (`on:`). The file must keep the `.yml` name, because the shared `lint-yaml`
+workflow loads it by that exact path.
 
 Run the same checks locally before opening a pull request:
 
@@ -108,6 +117,7 @@ ansible-galaxy collection install -r requirements.yml
 yamllint -f parsable .
 ansible-playbook -i localhost, -c local --syntax-check site.yml
 ansible-lint .
+npx markdownlint-cli2 "**/*.md" "#.venv"
 ```
 
 Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) with each change. Pushing a

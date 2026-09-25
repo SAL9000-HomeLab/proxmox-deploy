@@ -5,6 +5,9 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: Pull-request linting for Markdown (markdownlint), links (linkspector) and YAML via the
+  shared workflows, with `.markdownlint.json` and `.linkspector.yml`. The yamllint config is now
+  `.yamllint.yml`, the name the shared `lint-yaml` workflow expects. Markdown fixed to pass.
 - Added: CI on pushes to `main` and on pull requests (yamllint, playbook syntax check,
   ansible-lint) via the shared `SAL9000-HomeLab/shared-actions` workflow, with `.yamllint`
   and `.ansible-lint` configs. Tasks use FQCN module names and wrap at 120 columns.
