@@ -1,3 +1,4 @@
+---
 # group_vars/proxmox.yml
 # AWX-friendly sample vars file for site.yml.
 #

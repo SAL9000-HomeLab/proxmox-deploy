@@ -6,35 +6,41 @@
 
 # --- adjust CPU & memory to match desired settings (idempotent) ----------
 - name: Compute desired cores and memory (vm -> proxmox -> defaults)
-  set_fact:
+  ansible.builtin.set_fact:
     desired_cores: >-
       {{ vm_item.cores
-         | default(proxmox.cpu if (proxmox is defined and 'cpu' in proxmox) else (proxmox_defaults.cpu if (proxmox_defaults is defined and 'cpu' in proxmox_defaults) else 2) )
+         | default(proxmox.cpu if (proxmox is defined and 'cpu' in proxmox)
+                   else (proxmox_defaults.cpu if (proxmox_defaults is defined and 'cpu' in proxmox_defaults)
+                   else 2) )
       }}
     desired_memory: >-
       {{ vm_item.memory
-         | default(proxmox.memory if (proxmox is defined and 'memory' in proxmox) else (proxmox_defaults.memory if (proxmox_defaults is defined and 'memory' in proxmox_defaults) else 2048) )
+         | default(proxmox.memory if (proxmox is defined and 'memory' in proxmox)
+                   else (proxmox_defaults.memory if (proxmox_defaults is defined and 'memory' in proxmox_defaults)
+                   else 2048) )
       }}
   run_once: false
 
 - name: Parse current cores & memory from qm config (if present)
-  set_fact:
-    current_cores: "{{ (qm_config.stdout | regex_search('(?<=cores: )\\d+') ) | default('') }}"
-    current_memory: "{{ (qm_config.stdout | regex_search('(?<=memory: )\\d+') ) | default('') }}"
+  ansible.builtin.set_fact:
+    current_cores: "{{ (qm_config.stdout | regex_search('(?<=cores: )\\d+')) | default('') }}"
+    current_memory: "{{ (qm_config.stdout | regex_search('(?<=memory: )\\d+')) | default('') }}"
   when: qm_config is defined
   run_once: false
 
 - name: Build qm set argv for CPU/memory changes (include only differing flags)
-  set_fact:
+  ansible.builtin.set_fact:
     qm_set_cfg_argv: >-
       {{
         [
           'qm', 'set', (desired_vmid | string)
         ]
         +
-        ( ['--cores', (desired_cores | string)] if ( (current_cores | default('')) | string != (desired_cores | string) ) else [] )
+        ( ['--cores', (desired_cores | string)]
+          if ( (current_cores | default('')) | string != (desired_cores | string) ) else [] )
         +
-        ( ['--memory', (desired_memory | string)] if ( (current_memory | default('')) | string != (desired_memory | string) ) else [] )
+        ( ['--memory', (desired_memory | string)]
+          if ( (current_memory | default('')) | string != (desired_memory | string) ) else [] )
       }}
   run_once: false
 
@@ -83,9 +89,10 @@
       {% endif %}
 
 - name: Parse current net0 config from qm config
-  set_fact:
+  ansible.builtin.set_fact:
     current_net0: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: ).*') | default('') }}"
-    current_net0_model: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: )[a-zA-Z0-9]+(?==)') | default('') }}"
+    current_net0_model: >-
+      {{ (qm_config.stdout | default('')) | regex_search('(?<=net0: )[a-zA-Z0-9]+(?==)') | default('') }}
 
 - name: Configure network device (bridge + VLAN, only if different)
   ansible.builtin.command:
@@ -101,18 +108,20 @@
   when: >
     (current_net0_model != net_model_resolved)
     or (('bridge=' ~ net_bridge_resolved) not in current_net0)
-    or ((vm_item.vlan is defined and vm_item.vlan | string | length > 0) and (('tag=' ~ (vm_item.vlan | string)) not in current_net0))
+    or ((vm_item.vlan is defined and vm_item.vlan | string | length > 0)
+        and (('tag=' ~ (vm_item.vlan | string)) not in current_net0))
     or ((vm_item.vlan is not defined or vm_item.vlan | string | length == 0) and ('tag=' in current_net0))
 
 # vm_item.tags may be a YAML list or a comma/semicolon-separated string.
 # Proxmox stores tags ';'-separated in qm config, so split on any of , ; or whitespace.
 - name: Parse current tags from qm config
-  set_fact:
+  ansible.builtin.set_fact:
     current_tags: >-
       {{ ((qm_config.stdout | default('')) | regex_search('(?<=tags: ).*') | default('', true))
          | regex_findall('[^,;\s]+') | unique | sort }}
     desired_tags: >-
-      {{ ((vm_item.tags | join(',')) if (vm_item.tags is defined and vm_item.tags is not string and vm_item.tags is iterable)
+      {{ ((vm_item.tags | join(','))
+            if (vm_item.tags is defined and vm_item.tags is not string and vm_item.tags is iterable)
           else (vm_item.tags | default('') | string))
          | regex_findall('[^,;\s]+') | unique | sort }}
 
@@ -133,7 +142,7 @@
     - current_tags != desired_tags
 
 - name: Parse current description/notes from qm config
-  set_fact:
+  ansible.builtin.set_fact:
     current_description: "{{ (qm_config.stdout | default('')) | regex_search('(?<=description: ).*') | default('') }}"
 
 - name: Set Proxmox VM description/notes (if defined and different)
@@ -156,7 +165,7 @@
 
 # Collect real disks (scsiN/virtioN/sataN/ideN, excluding cdroms) and their size=.
 - name: Parse disks and boot order from qm config
-  set_fact:
+  ansible.builtin.set_fact:
     _qm_disk_lines: >-
       {{ (qm_config.stdout | default('')) | regex_findall('(?m)^((?:scsi|virtio|sata|ide)\d+): (.*)$')
          | rejectattr('1', 'search', 'media=cdrom') | list }}
@@ -165,15 +174,16 @@
          | regex_findall('[^;]+') }}
 
 - name: Map disk names to sizes
-  set_fact:
+  ansible.builtin.set_fact:
     _qm_disks: >-
       {{ dict(_qm_disk_lines | map(attribute='0')
-              | zip(_qm_disk_lines | map(attribute='1') | map('regex_replace', '^(?:.*size=([0-9.]+[KMGT]?).*|.*)$', '\1'))) }}
+              | zip(_qm_disk_lines | map(attribute='1')
+                     | map('regex_replace', '^(?:.*size=([0-9.]+[KMGT]?).*|.*)$', '\1'))) }}
 
 # Use the requested disk_target if the VM actually has it; otherwise fall back to
 # the first disk in the boot order, then to the first disk found.
 - name: Resolve disk to resize
-  set_fact:
+  ansible.builtin.set_fact:
     disk_target_resolved: >-
       {{ disk_target if disk_target in _qm_disks
          else ((_qm_boot_order | select('in', _qm_disks) | list) + (_qm_disks | list)) | first | default('') }}
@@ -195,16 +205,25 @@
     - vm_item.disk_size is defined
     - disk_target_resolved | length == 0
 
-# Sizes may be K/M/G/T suffixed (or bare bytes); normalise both sides to GiB.
+# Sizes may be K/M/G/T suffixed (or bare bytes); normalize both sides to GiB.
 - name: Split desired and current disk size into number and unit
-  set_fact:
-    _desired_size_parts: "{{ ((vm_item.disk_size | string | upper | regex_findall('([0-9.]+)\\s*([KMGT]?)') | map('list') | list) + [['0', '']]) | first }}"
-    _current_size_parts: "{{ ((_qm_disks[disk_target_resolved] | default('0') | regex_findall('([0-9.]+)([KMGT]?)') | map('list') | list) + [['0', '']]) | first }}"
-    _gib_per_unit: {'K': 0.00000095367431640625, 'M': 0.0009765625, 'G': 1, 'T': 1024, '': 0.000000000931322574615478515625}
+  ansible.builtin.set_fact:
+    _desired_size_parts: >-
+      {{ ((vm_item.disk_size | string | upper | regex_findall('([0-9.]+)\s*([KMGT]?)') | map('list') | list)
+          + [['0', '']]) | first }}
+    _current_size_parts: >-
+      {{ ((_qm_disks[disk_target_resolved] | default('0') | regex_findall('([0-9.]+)([KMGT]?)') | map('list') | list)
+          + [['0', '']]) | first }}
+    _gib_per_unit:
+      'K': 0.00000095367431640625
+      'M': 0.0009765625
+      'G': 1
+      'T': 1024
+      '': 0.000000000931322574615478515625
   when: vm_item.disk_size is defined
 
 - name: Compute desired and current disk size in GiB
-  set_fact:
+  ansible.builtin.set_fact:
     desired_disk_gib: "{{ (_desired_size_parts[0] | float) * _gib_per_unit[_desired_size_parts[1]] }}"
     current_disk_gib: "{{ (_current_size_parts[0] | float) * _gib_per_unit[_current_size_parts[1]] }}"
   when: vm_item.disk_size is defined

@@ -2,7 +2,7 @@
 # roles/proxmox_clone/tasks/main.yml
 
 - name: Merge Proxmox defaults
-  set_fact:
+  ansible.builtin.set_fact:
     proxmox: >-
       {{
         proxmox_defaults
@@ -10,15 +10,17 @@
       }}
 
 - name: Ensure provision_vms present
-  assert:
+  ansible.builtin.assert:
     that:
       - provision_vms is defined
       - provision_vms | length > 0
-    fail_msg: "No provision_vms defined. Pass provision_vms via AWX extra vars, inventory, host_vars, or group_vars/proxmox.yml."
+    fail_msg: >-
+      No provision_vms defined. Pass provision_vms via AWX extra vars, inventory, host_vars,
+      or group_vars/proxmox.yml.
 
 # Loop the per-VM tasks; vm_item is the loop var
 - name: Provision VMs from list (include per-VM task file)
-  include_tasks: provision_vm.yml
+  ansible.builtin.include_tasks: provision_vm.yml
   loop: "{{ provision_vms }}"
   loop_control:
     loop_var: vm_item

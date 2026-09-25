@@ -30,6 +30,7 @@ The deploy repo should never invent a template name on the fly. It should refere
 name already created in the VM template repo and then set per-instance values separately.
 
 Example AWX extra vars:
+
 ```yaml
 provision_vms:
   - name: rocky10-web-01
@@ -83,3 +84,31 @@ Windows VMs also require the domain-join variables (`domain_name`, `domain_join_
 `site.yml` doesn't load a credentials file for these today, so they need to come from an AWX
 credential injected into the job (or `-e` on the CLI). `domain_name`, `domain_join_ou`, and
 `domain_admin_group` currently default from `group_vars/all.yml`.
+
+## Development and CI
+
+Every push to `main` and every pull request runs the shared
+[`ansible-ci` workflow](https://github.com/SAL9000-HomeLab/shared-actions/blob/main/.github/workflows/ansible-ci.yml)
+(`.github/workflows/ansible-ci.yml`), which checks:
+
+- `yamllint` using [`.yamllint`](.yamllint): the default rules with 120-column lines, matching
+  the editor ruler in `.vscode/settings.json`.
+- `ansible-playbook --syntax-check` on `site.yml`.
+- `ansible-lint` using [`.ansible-lint`](.ansible-lint). The only rule skipped is
+  `var-naming[no-role-prefix]`: the role's variables (`provision_vms`, `proxmox`, `netbox`,
+  `technitium_dns`, `linux_admin_*`, …) are set by AWX job templates and inventories, so
+  prefixing them with `proxmox_clone_` would break existing callers.
+
+Run the same checks locally before opening a pull request:
+
+```sh
+python3 -m venv .venv && . .venv/bin/activate
+pip install "yamllint>=1.30" "ansible>=2.15" "ansible-lint>=6"
+ansible-galaxy collection install -r requirements.yml
+yamllint -f parsable .
+ansible-playbook -i localhost, -c local --syntax-check site.yml
+ansible-lint .
+```
+
+Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) with each change. Pushing a
+`vX.Y.Z` tag publishes that version's section as a GitHub release.

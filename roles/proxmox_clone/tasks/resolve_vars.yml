@@ -4,14 +4,14 @@
 # Expects vm_item loop variable.
 
 - name: Prepare safe defaults (avoid undefined attribute access)
-  set_fact:
+  ansible.builtin.set_fact:
     proxmox_cb: "{{ proxmox if (proxmox is defined) else {} }}"
     proxmox_defaults_cb: "{{ proxmox_defaults if (proxmox_defaults is defined) else {} }}"
     proxmox_behavior_cb: "{{ proxmox_clone_behavior if (proxmox_clone_behavior is defined) else {} }}"
   run_once: false
 
 - name: Prepare VM variables (robust defaults, uses .get())
-  set_fact:
+  ansible.builtin.set_fact:
     desired_vmid: >-
       {{ vm_item.vmid if (vm_item.vmid is defined and vm_item.vmid) else (next_vmid | default(0)) }}
     cloud_type: "{{ vm_item.os_type | default('linux') }}"
@@ -51,18 +51,24 @@
   changed_when: false
 
 - name: Determine if target vmid exists on node
-  set_fact:
-    target_exists: "{{ (qm_list_full.stdout_lines | select('match', '^\\s*' + (desired_vmid | string) + '\\s') | list) | length > 0 }}"
+  ansible.builtin.set_fact:
+    target_exists: >-
+      {{ (qm_list_full.stdout_lines | select('match', '^\s*' + (desired_vmid | string) + '\s') | list)
+         | length > 0 }}
   run_once: false
 
 - name: Determine if template vmid exists on node
-  set_fact:
-    template_exists: "{{ (qm_list_full.stdout_lines | select('match', '^\\s*' + (vm_item.template_vmid | string) + '\\s') | list) | length > 0 }}"
+  ansible.builtin.set_fact:
+    template_exists: >-
+      {{ (qm_list_full.stdout_lines | select('match', '^\s*' + (vm_item.template_vmid | string) + '\s') | list)
+         | length > 0 }}
   run_once: false
 
 - name: Fail if template not present on node
-  fail:
-    msg: "Template vmid {{ vm_item.template_vmid }} not found on node {{ node_name }}. qm list: {{ qm_list_full.stdout_lines | join('\\n') }}"
+  ansible.builtin.fail:
+    msg: >-
+      Template vmid {{ vm_item.template_vmid }} not found on node {{ node_name }}.
+      qm list: {{ qm_list_full.stdout_lines | join('\n') }}
   when: not template_exists
   delegate_to: "{{ node_name }}"
   become: true
@@ -79,26 +85,31 @@
   when: desired_vmid | default(0) | int == 0
 
 - name: Set next_vmid from qm nextid output (or fallback)
-  set_fact:
-    next_vmid: "{{ (qm_nextid_raw.stdout | default('') | regex_search('\\d+') | default('')) | int if (qm_nextid_raw is defined and (qm_nextid_raw.stdout | default('') | length) > 0) else (next_vmid | default(100) | int) }}"
+  ansible.builtin.set_fact:
+    next_vmid: >-
+      {{ (qm_nextid_raw.stdout | default('') | regex_search('\d+') | default('')) | int
+         if (qm_nextid_raw is defined and (qm_nextid_raw.stdout | default('') | length) > 0)
+         else (next_vmid | default(100) | int) }}
   when: desired_vmid | default(0) | int == 0
   run_once: false
 
 - name: Use auto-allocated next_vmid if desired_vmid was empty/zero
-  set_fact:
+  ansible.builtin.set_fact:
     desired_vmid: "{{ next_vmid | int }}"
   when: desired_vmid | default(0) | int == 0
   run_once: false
 
 - name: Assert desired_vmid is valid
-  assert:
+  ansible.builtin.assert:
     that:
       - desired_vmid is defined
       - (desired_vmid | int) > 0
-    fail_msg: "desired_vmid is missing or invalid ({{ desired_vmid }}). qm nextid output: {{ qm_nextid_raw.stdout | default('') }}"
+    fail_msg: >-
+      desired_vmid is missing or invalid ({{ desired_vmid }}).
+      qm nextid output: {{ qm_nextid_raw.stdout | default('') }}
 
 - name: Resolve SSH keys for the Linux admin user (role-wide + per-VM)
-  set_fact:
+  ansible.builtin.set_fact:
     linux_admin_keys_resolved: >-
       {{ ((linux_admin_ssh_keys | default([]))
           + (vm_item.ssh_authorized_keys | default([])))
@@ -108,7 +119,7 @@
 # Templates lock the build account and disable password SSH, so a Linux VM
 # with no keys would boot with no way to log in. Fail before cloning.
 - name: Assert the Linux VM will get at least one SSH key
-  assert:
+  ansible.builtin.assert:
     that:
       - linux_admin_keys_resolved | length > 0
     fail_msg: >-
