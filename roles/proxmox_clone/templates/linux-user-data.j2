@@ -26,9 +26,16 @@ packages:
 runcmd:
   - systemctl enable qemu-guest-agent
   - systemctl start qemu-guest-agent
+  # Grow / into a disk enlarged by disk_size. cloud-init's growpart doesn't: the Rocky templates put /
+  # on LVM and don't include growpart, so / would stay at the template's size.
+  - /usr/local/sbin/grow-root-fs
 
-{% if vm_item.dns_servers is defined or vm_item.dns is defined %}
 write_files:
+  - path: /usr/local/sbin/grow-root-fs
+    permissions: "0755"
+    content: |
+      {{ lookup('ansible.builtin.file', 'grow-root-fs.sh') | indent(6) }}
+{% if vm_item.dns_servers is defined or vm_item.dns is defined %}
   - path: /etc/resolv.conf
     content: |
 {# Block tags sit at column 0 so trim_blocks leaves no stray indentation in the file. #}
