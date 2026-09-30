@@ -42,7 +42,9 @@ Variable reference:
   - `net_bridge`, `net_model` (default `virtio`), `vlan`, `disk_target`, `cores` (default 2),
     `memory` (default 2048), `disk_size` (e.g. `100G` — only grows the disk, never shrinks; also
     applied to existing VMs). If `disk_target` isn't a disk on the VM, the boot disk is resized instead
-    (with a warning).
+    (with a warning). On a Linux VM's first boot, cloud-init runs `files/grow-root-fs.sh` to grow the
+    root partition, LVM volume and filesystem into the new space. It doesn't run again, so after
+    enlarging an existing VM's disk, grow it with ans-cleanup's `playbook_grow_root_fs.yml`.
   - `tags` (YAML list, or a comma-separated string such as `"windows,2025,core"`). Set as the VM's
     tags in Proxmox (`qm set --tags`; Proxmox creates new tags on the fly), and — only when NetBox
     allocates the IP (i.e. `ip` isn't supplied) — as the `tags` on that NetBox IP address
@@ -110,6 +112,8 @@ Templates:
 
 - `templates/linux-user-data.j2` and `templates/windows-cloudbase-init-userdata.j2` are the only
   two templates actually rendered (selected by `os_type` in `cloudinit.yml`).
+- `files/grow-root-fs.sh` is embedded in the Linux user-data as `/usr/local/sbin/grow-root-fs` and run
+  by `runcmd`. The same script is in ans-cleanup (`roles/grow_root_fs/files/`); keep the two identical.
 - `templates/ref.j2` is an inactive reference/scratch template (not selected by any task) sketching
   possible future cloudbase-init options (`local_groups`, `admin_user`/`admin_groups`/`admin_password`,
   `ntp_servers`, Windows `ssh_authorized_keys`). None of those fields currently have any effect.

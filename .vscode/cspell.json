@@ -49,7 +49,12 @@
         "notmatch",
         "adsi",
         "dsgetdc",
-        "nltest"
+        "nltest",
+        "dumpe2fs",
+        "growfs",
+        "growpart",
+        "lvextend",
+        "pvresize"
     ],
     "flagWords": [
         "hte"

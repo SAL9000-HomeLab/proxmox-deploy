@@ -5,6 +5,10 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Fixed: Linux VMs now use the disk space `disk_size` adds. The Rocky templates put `/` on LVM and don't
+  include `growpart`, so cloud-init never grew it and `/` stayed at the template's size. The user-data now
+  installs `files/grow-root-fs.sh` and runs it on first boot to grow the partition, LVM physical and logical
+  volume, and filesystem. VMs deployed earlier can be fixed with ans-cleanup's `playbook_grow_root_fs.yml`.
 - Added: Pull-request linting for Markdown (markdownlint), links (linkspector) and YAML via the
   shared workflows, with `.markdownlint.json` and `.linkspector.yml`. The yamllint config is now
   `.yamllint.yml`, the name the shared `lint-yaml` workflow expects. Markdown fixed to pass.
