@@ -160,13 +160,20 @@
           {% endif %}{% endfor %}]
       when: (desired_tags | default([]) | length) > 0
 
+    # dns_name uses the VM's domain, else the same zone the Technitium record goes in.
+    - name: Resolve NetBox dns_name domain
+      ansible.builtin.set_fact:
+        netbox_dns_domain: >-
+          {{ vm_item.domain | default(vm_item.dns_zone | default((technitium_dns | default({})).zone
+             | default(''), true), true) }}
+
     - name: Build NetBox IP reservation body (description/dns_name/tags, only if provided)
       ansible.builtin.set_fact:
         netbox_ip_body: >-
           {{
             {}
             | combine({'description': vm_item.description} if vm_item.description is defined else {})
-            | combine({'dns_name': (vm_item.name ~ '.' ~ vm_item.domain)} if vm_item.domain is defined else {})
+            | combine({'dns_name': (vm_name ~ '.' ~ netbox_dns_domain)} if netbox_dns_domain | length > 0 else {})
             | combine({'tags': netbox_tag_objects} if (desired_tags | default([]) | length) > 0 else {})
           }}
 

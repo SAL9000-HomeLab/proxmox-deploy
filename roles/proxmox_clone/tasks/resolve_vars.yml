@@ -21,7 +21,13 @@
     storage_name: >-
       {{ vm_item.storage
          | default( proxmox_cb.get('storage') | default(proxmox_defaults_cb.get('storage','local')) ) }}
-    vm_name: "{{ vm_item.name }}"
+    # Proxmox and NetBox always get the name in caps. Inside the guest, Linux
+    # hostnames are lowercase and Windows ones stay in caps.
+    vm_name: "{{ vm_item.name | upper }}"
+    guest_hostname: >-
+      {{ (vm_item.hostname | default(vm_item.name, true)) | upper
+         if (vm_item.os_type | default('linux')) == 'windows'
+         else (vm_item.hostname | default(vm_item.name, true)) | lower }}
     disk_target: >-
       {{ vm_item.disk_target
          | default(

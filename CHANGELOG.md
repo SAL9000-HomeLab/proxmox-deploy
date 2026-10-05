@@ -5,6 +5,11 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Changed: VM names are now uppercased in Proxmox and in the NetBox `dns_name`, whatever case `name` is
+  given in. Inside the guest, Linux hostnames are lowercase and Windows hostnames are uppercase. Only new
+  clones get the new Proxmox name; an existing VM keeps its name.
+- Fixed: The NetBox IP reservation gets a `dns_name` even when the VM has no `domain`; it falls back to
+  `dns_zone`, then `technitium_dns.zone`, the same zone the Technitium A record uses.
 - Fixed: Linux VMs now use the disk space `disk_size` adds. The Rocky templates put `/` on LVM and don't
   include `growpart`, so cloud-init never grew it and `/` stayed at the template's size. The user-data now
   installs `files/grow-root-fs.sh` and runs it on first boot to grow the partition, LVM physical and logical

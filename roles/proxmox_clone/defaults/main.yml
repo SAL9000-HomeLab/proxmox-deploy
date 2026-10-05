@@ -53,7 +53,8 @@ provision_vms: []
 #   node: pve01.lab.example.com
 #   os_type: linux
 #   description: "Internal web server for team X"
-#   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP
+#   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP;
+#                          # defaults to dns_zone, then technitium_dns.zone
 #   tags: [linux, web, team-x]  # or "linux,web,team-x"; applied to Proxmox tags, and to
 #                               # NetBox IP tags when NetBox allocates the IP
 #   cores: 2
