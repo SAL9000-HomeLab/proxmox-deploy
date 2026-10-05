@@ -166,7 +166,7 @@
           {{
             {}
             | combine({'description': vm_item.description} if vm_item.description is defined else {})
-            | combine({'dns_name': (vm_item.name ~ '.' ~ vm_item.domain)} if vm_item.domain is defined else {})
+            | combine({'dns_name': (vm_name ~ '.' ~ vm_item.domain)} if vm_item.domain is defined else {})
             | combine({'tags': netbox_tag_objects} if (desired_tags | default([]) | length) > 0 else {})
           }}
 

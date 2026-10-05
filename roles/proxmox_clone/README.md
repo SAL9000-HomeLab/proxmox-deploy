@@ -39,6 +39,9 @@ Variable reference:
     `qm nextid` when omitted or `0`), `node` (optional, falls back to `proxmox.node` /
     `proxmox_defaults.node`), `storage` (optional, falls back to `proxmox.storage` /
     `proxmox_defaults.storage`), `os_type` (`linux` or `windows`, default `linux`).
+  - Name casing: `name` is uppercased for the Proxmox VM name and the NetBox `dns_name`, whatever
+    case it's given in. The hostname set inside the guest (`hostname`, or `name` when that's unset)
+    is lowercased on Linux and uppercased on Windows.
   - `net_bridge`, `net_model` (default `virtio`), `vlan`, `disk_target`, `cores` (default 2),
     `memory` (default 2048), `disk_size` (e.g. `100G` — only grows the disk, never shrinks; also
     applied to existing VMs). If `disk_target` isn't a disk on the VM, the boot disk is resized instead
@@ -70,7 +73,7 @@ Variable reference:
     — only when NetBox allocates the IP (i.e. `ip` isn't supplied) — as the `description` on that
     NetBox IP address reservation.
   - `domain`: only used when NetBox allocates the IP (i.e. `ip` isn't supplied) — combined with
-    `name` as `<name>.<domain>` and set as the `dns_name` on that NetBox IP address reservation.
+    the uppercased `name` as `<NAME>.<domain>` and set as the `dns_name` on that NetBox IP address reservation.
     (Unrelated to the Windows domain-join variables below, despite the similar name.)
   - `timezone`: Windows only — passed to cloudbase-init as `set_timezone`. Linux VMs are
     currently hardcoded to `UTC` in `templates/linux-user-data.j2`, regardless of this field.

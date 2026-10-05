@@ -1,6 +1,6 @@
 #cloud-config
-hostname: {{ vm_item.hostname | default(vm_item.name) }}
-fqdn: {{ vm_item.hostname | default(vm_item.name) }}
+hostname: {{ guest_hostname }}
+fqdn: {{ guest_hostname }}
 manage_etc_hosts: true
 
 timezone: UTC
