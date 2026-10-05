@@ -74,6 +74,7 @@ Variable reference:
     NetBox IP address reservation.
   - `domain`: only used when NetBox allocates the IP (i.e. `ip` isn't supplied) — combined with
     the uppercased `name` as `<NAME>.<domain>` and set as the `dns_name` on that NetBox IP address reservation.
+    Falls back to `dns_zone`, then `technitium_dns.zone`; with none of them set, no `dns_name` is sent.
     (Unrelated to the Windows domain-join variables below, despite the similar name.)
   - `timezone`: Windows only — passed to cloudbase-init as `set_timezone`. Linux VMs are
     currently hardcoded to `UTC` in `templates/linux-user-data.j2`, regardless of this field.
