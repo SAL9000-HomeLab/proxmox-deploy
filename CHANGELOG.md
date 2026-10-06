@@ -25,3 +25,4 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 - Fixed: Rendered `/etc/resolv.conf` no longer has stray indentation. (PR #15)
 - Changed: Example values replaced with placeholders; rendered userdata in `/tmp` is mode 0600
   and deleted after upload; MIT license added. (PR #13)
+- Changed: Ansible CI runs on pull requests only, no longer on pushes to `main` (synced from ans-template).
