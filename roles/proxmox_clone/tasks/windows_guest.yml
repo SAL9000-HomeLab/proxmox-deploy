@@ -1,0 +1,131 @@
+---
+# roles/proxmox_clone/tasks/windows_guest.yml
+# Windows VMs have no cloud-init: configure the guest over the QEMU guest agent (qm guest exec runs as SYSTEM
+# and needs no network), then hand the VM to the windows_domain_member play over WinRM.
+# Expects vm_item loop variable and facts from resolve_vars.yml / cloudinit.yml; runs after the VM is started.
+
+- name: Check the Windows VM has an IP address to configure
+  ansible.builtin.assert:
+    that:
+      - vm_ip | default('') | length > 0
+    fail_msg: >-
+      {{ vm_name }} has no IP address: set ip on the VM, or let NetBox allocate one. Windows VMs get a static
+      address over the guest agent, and the domain play connects to it.
+
+- name: Read the VM's network MAC address
+  ansible.builtin.command:
+    cmd: qm config {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: windows_guest_qm_config
+  changed_when: false
+
+- name: Set the guest adapter MAC (Windows formats it as AA-BB-CC-DD-EE-FF)
+  ansible.builtin.set_fact:
+    windows_guest_mac: >-
+      {{ (windows_guest_qm_config.stdout
+          | regex_search('(?m)^net0: [a-z0-9]+=([0-9A-Fa-f:]{17})', '\1') | first)
+         | upper | replace(':', '-') }}
+
+- name: Wait for the QEMU guest agent
+  ansible.builtin.command:
+    cmd: qm guest cmd {{ desired_vmid }} ping
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: windows_guest_agent
+  until: windows_guest_agent.rc == 0
+  retries: "{{ (proxmox_clone_wait.service_timeout | default(600) | int) // 10 }}"
+  delay: 10
+  changed_when: false
+
+# The vm-templates clone answer file runs specialize and OOBE unattended; SetupComplete.cmd writes this marker
+# once they're done (and the answer file holding the build password has been deleted).
+- name: Wait for the first-boot setup to finish (SetupComplete.done)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ desired_vmid }}"
+      - --timeout
+      - "30"
+      - --
+      - powershell.exe
+      - -NoProfile
+      - -Command
+      - if (Test-Path "$env:SystemRoot\Setup\Scripts\SetupComplete.done") { exit 0 } else { exit 1 }
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: windows_guest_setup
+  until: >-
+    windows_guest_setup.rc == 0
+    and (windows_guest_setup.stdout | from_json).exitcode | default(1) == 0
+  retries: "{{ (proxmox_clone_wait.service_timeout | default(600) | int) // 10 }}"
+  delay: 10
+  changed_when: false
+
+# The script holds the Administrator password, so it goes to a root-only file on the node (tmpfs) and reaches
+# the guest on stdin: it never appears in a command line or in the task's logged arguments.
+- name: Configure the network, timezone and Administrator password in the guest
+  block:
+    - name: Write the guest configuration script on the node
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', 'windows-guest-config.ps1.j2') }}"
+        dest: "/run/proxmox-deploy-{{ desired_vmid }}.ps1"
+        owner: root
+        group: root
+        mode: "0600"
+      delegate_to: "{{ node_name }}"
+      become: true
+      changed_when: false  # scratch file; the guest changes are reported below
+      no_log: true
+
+    - name: Run the guest configuration script over the guest agent
+      ansible.builtin.shell:
+        cmd: >-
+          qm guest exec {{ desired_vmid }} --pass-stdin 1 --timeout 300 --
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass
+          -Command '& ([scriptblock]::Create([Console]::In.ReadToEnd()))'
+          < /run/proxmox-deploy-{{ desired_vmid }}.ps1
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: windows_guest_config
+      changed_when: >-
+        windows_guest_config.rc == 0
+        and ((windows_guest_config.stdout | from_json)['out-data'] | default('{}') | from_json).changed
+        | default(false)
+      failed_when: >-
+        windows_guest_config.rc != 0
+        or (windows_guest_config.stdout | from_json).exitcode | default(1) != 0
+  always:
+    - name: Remove the guest configuration script from the node
+      ansible.builtin.file:
+        path: "/run/proxmox-deploy-{{ desired_vmid }}.ps1"
+        state: absent
+      delegate_to: "{{ node_name }}"
+      become: true
+      changed_when: false
+
+- name: Show what the guest configuration changed
+  ansible.builtin.debug:
+    msg: >-
+      {{ vm_name }}: {{ ((windows_guest_config.stdout | from_json)['out-data'] | from_json).changes
+         | default([]) | join(', ') or 'no changes' }}
+
+- name: Hand the VM to the Windows domain play
+  ansible.builtin.add_host:
+    name: "{{ guest_hostname }}"
+    groups: proxmox_deploy_windows
+    ansible_host: "{{ vm_ip_address }}"
+    ansible_connection: psrp
+    ansible_psrp_protocol: http
+    ansible_port: 5985
+    ansible_psrp_auth: ntlm
+    ansible_user: Administrator
+    ansible_password: "{{ windows_admin_password }}"
+    windows_domain_member_hostname: "{{ guest_hostname }}"
+    windows_domain_member_ou: "{{ vm_item.domain_join_ou | default(omit) }}"
+    windows_domain_member_admin_groups: "{{ vm_item.admin_groups | default(omit) }}"
+    windows_domain_member_cert_template: "{{ vm_item.cert_template | default(omit) }}"
+  changed_when: false
+  no_log: true  # carries the Administrator password

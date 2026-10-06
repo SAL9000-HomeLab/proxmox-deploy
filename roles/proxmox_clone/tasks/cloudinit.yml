@@ -1,16 +1,19 @@
 ---
 # roles/proxmox_clone/tasks/cloudinit.yml
-# Render and upload the cloud-init/cloudbase-init snippet, allocate an IP from
-# NetBox if one wasn't supplied, and reconcile cicustom/ipconfig/DNS.
+# Render and upload the cloud-init snippet (Linux), allocate an IP from NetBox if
+# one wasn't supplied, and reconcile cicustom/ipconfig/DNS. Windows VMs have no
+# cloud-init: they still record ipconfig0/nameserver/searchdomain on the VM (so a
+# re-run reuses the IP), and windows_guest.yml applies them in the guest.
 # Expects vm_item loop variable and facts from resolve_vars.yml / clone.yml / configure.yml.
 
-- name: Render userdata locally (cloudbase for windows, cloud-init for linux)
+- name: Render cloud-init userdata locally (Linux)
   ansible.builtin.template:
-    src: "{{ 'windows-cloudbase-init-userdata.j2' if cloud_type == 'windows' else 'linux-user-data.j2' }}"
+    src: linux-user-data.j2
     dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
-    mode: '0600'  # Windows userdata embeds domain_join_pass
+    mode: '0600'
   delegate_to: localhost
   register: userdata_render
+  when: cloud_type == 'linux'
 
 - name: Resolve raw snippets dir from variables (safe)
   ansible.builtin.set_fact:
@@ -40,25 +43,24 @@
     mode: '0755'
   delegate_to: "{{ node_name }}"
   become: true
+  when: cloud_type == 'linux'
 
 - name: Copy userdata/snippet to node snippets dir (using resolved dir)
   ansible.builtin.copy:
     src: "{{ userdata_render.dest }}"
-    dest: >-
-      {{ (snippets_dir_resolved | regex_replace('/$', '')) ~ '/'
-         ~ ('cloudbase-' if cloud_type == 'windows' else 'user-data-') ~ (desired_vmid | string) }}
+    dest: "{{ (snippets_dir_resolved | regex_replace('/$', '')) ~ '/user-data-' ~ (desired_vmid | string) }}"
     owner: root
     mode: '0600'
   delegate_to: "{{ node_name }}"
   become: true
-  when: userdata_render is defined and userdata_render.dest is defined
+  when: userdata_render.dest is defined
 
-- name: Remove locally rendered userdata (may contain the domain-join password)
+- name: Remove locally rendered userdata
   ansible.builtin.file:
     path: "{{ userdata_render.dest }}"
     state: absent
   delegate_to: localhost
-  when: userdata_render is defined and userdata_render.dest is defined
+  when: userdata_render.dest is defined
 
 - name: Resolve NetBox credential variables for this host
   ansible.builtin.set_fact:
@@ -232,8 +234,7 @@
 
 - name: Build desired cicustom and ip/DNS strings (works for Linux & Windows)
   ansible.builtin.set_fact:
-    desired_cicustom: >-
-      user=local:snippets/{{ 'cloudbase-' if cloud_type == 'windows' else 'user-data-' }}{{ desired_vmid }}
+    desired_cicustom: "{{ ('user=local:snippets/user-data-' ~ desired_vmid) if cloud_type == 'linux' else '' }}"
     desired_ipconfig: >-
       {% if vm_ip is defined and vm_ip | length > 0 %}
       ip={{ vm_ip }}{% if vm_gateway is defined and vm_gateway | length > 0 %},gw={{ vm_gateway }}{% endif %}
@@ -253,10 +254,9 @@
   ansible.builtin.set_fact:
     qm_set_argv: >-
       {{
-        [
-          'qm', 'set', (desired_vmid | string),
-          '--cicustom', desired_cicustom
-        ]
+        ['qm', 'set', (desired_vmid | string)]
+        +
+        (['--cicustom', desired_cicustom] if desired_cicustom | length > 0 else [])
         +
         (
           ['--ipconfig0',

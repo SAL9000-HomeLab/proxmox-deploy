@@ -132,3 +132,17 @@
       No SSH keys for {{ vm_name }}: set linux_admin_ssh_keys (role-wide, e.g. in AWX)
       or ssh_authorized_keys on the VM. Without one, nobody can log in to it.
   when: cloud_type == 'linux'
+
+# Windows VMs get a new local Administrator password over the guest agent and are then joined to the domain by
+# the windows_domain_member play; fail before cloning when the credentials for that are missing.
+- name: Assert the Windows credentials are set
+  ansible.builtin.assert:
+    that:
+      - windows_admin_password | default('') | length > 0
+      - domain_join_user | default('') | length > 0
+      - domain_join_pass | default('') | length > 0
+    fail_msg: >-
+      {{ vm_name }} is a Windows VM: set windows_admin_password (its new local Administrator password) and
+      domain_join_user / domain_join_pass, e.g. from AWX credentials.
+    quiet: true
+  when: cloud_type == 'windows'

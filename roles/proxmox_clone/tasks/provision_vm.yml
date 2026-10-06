@@ -12,7 +12,7 @@
 - name: Reconcile CPU/memory, network, tags, and disk size
   ansible.builtin.import_tasks: configure.yml
 
-- name: Reconcile cloud-init/cloudbase-init and NetBox IP
+- name: Reconcile cloud-init (Linux), NetBox IP and ipconfig
   ansible.builtin.import_tasks: cloudinit.yml
 
 - name: Manage VM DNS records

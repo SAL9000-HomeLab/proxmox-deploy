@@ -2,3 +2,10 @@
 collections:
   - name: effectivelywild.technitium_dns
     version: '1.1.2'
+  # windows_domain_member
+  - name: ansible.windows
+    version: ">=2.5.0,<4.0.0"
+  - name: community.windows
+    version: ">=2.3.0,<4.0.0"
+  - name: microsoft.ad
+    version: ">=1.7.0,<2.0.0"

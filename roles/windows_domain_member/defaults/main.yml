@@ -1,0 +1,42 @@
+---
+# roles/windows_domain_member/defaults/main.yml
+#
+# Joins a Windows VM to Active Directory, adds domain groups to its local Administrators, enrolls an ADCS
+# computer certificate and serves WinRM over HTTPS with it. The proxmox_clone role adds each Windows VM it
+# deploys to the proxmox_deploy_windows group with the connection details and the per-VM overrides
+# (windows_domain_member_hostname / _ou / _admin_groups / _cert_template) set as host variables.
+#
+# The defaults come from the repository-wide variables the old cloudbase-init flow used, so existing AWX
+# inventories and credentials keep working.
+
+# AD DNS domain to join, and the OU the computer account is created in ("" = the domain's default Computers).
+windows_domain_member_domain: "{{ domain_name }}"
+windows_domain_member_ou: "{{ domain_join_ou | default('') }}"
+
+# Account allowed to join computers to the domain, from an AWX credential. DOMAIN\user or user@domain; a bare
+# user name gets @<domain> appended.
+windows_domain_member_join_user: "{{ domain_join_user }}"
+windows_domain_member_join_password: "{{ domain_join_pass }}"
+
+# Computer name (NetBIOS, 15 characters at most). The VM is renamed in the same step as the join.
+windows_domain_member_hostname: "{{ inventory_hostname_short | upper }}"
+
+# Domain groups added to the local Administrators group. domain_admin_group (one group, as a string) is still
+# read when domain_admin_groups isn't set.
+windows_domain_member_admin_groups: >-
+  {{ domain_admin_groups | default([domain_admin_group] if domain_admin_group is defined else []) }}
+
+# ADCS certificate template (its name, not its display name) to enroll in when the computer has no certificate
+# WinRM HTTPS can use. The certificate needs the Server Authentication EKU and the computer's FQDN as a DNS name.
+# "" = don't enroll; use a certificate autoenrollment already delivered.
+windows_domain_member_cert_template: "{{ windows_cert_template | default('') }}"
+
+# Serve WinRM over HTTPS on 5986 with that certificate, and keep the listener bound to the current certificate
+# when autoenrollment renews it (scheduled task: at startup, daily, and on certificate replacement).
+windows_domain_member_winrm_https: true
+
+# Where the listener script lives on the VM.
+windows_domain_member_script_dir: 'C:\ProgramData\proxmox-deploy'
+
+# Seconds to wait for the VM to come back after the domain-join reboot.
+windows_domain_member_reboot_timeout: 900

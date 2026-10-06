@@ -1,9 +1,9 @@
 # proxmox-deploy
 
 This repository deploys VMs (Linux or Windows) to a Proxmox cluster by cloning a template over
-SSH (`qm`), optionally reserving an IP from NetBox, and applying cloud-init/cloudbase-init. All
-of the actual logic lives in the `proxmox_clone` role — see
-[roles/proxmox_clone/README.md](roles/proxmox_clone/README.md) for the full variable reference.
+SSH (`qm`), optionally reserving an IP from NetBox, and configuring the guest: cloud-init on Linux,
+the QEMU guest agent on Windows. Windows VMs are then joined to Active Directory and served over
+WinRM with HTTPS. See [roles/README.md](roles/README.md) for the two roles and their variables.
 
 Use `site.yml` from AWX and pass VM definitions through job extra vars.
 
@@ -79,11 +79,32 @@ Linux VMs need at least one SSH public key, because the templates have no usable
 Set `linux_admin_ssh_keys` once (e.g. in AWX) and/or `ssh_authorized_keys` per VM. They're
 installed for `linux_admin_user` (default `ansible`), which gets passwordless sudo.
 
-Windows VMs also require the domain-join variables (`domain_name`, `domain_join_ou`,
-`domain_admin_group`, `domain_join_user`, `domain_join_pass`) to be supplied as extra vars —
-`site.yml` doesn't load a credentials file for these today, so they need to come from an AWX
-credential injected into the job (or `-e` on the CLI). `domain_name`, `domain_join_ou`, and
-`domain_admin_group` currently default from `group_vars/all.yml`.
+## Windows VMs
+
+Windows VMs come from the vm-templates Windows Server 2025 templates, which boot through OOBE
+unattended (see vm-templates' "Windows clones"). Then, in `site.yml`:
+
+1. **proxmox_clone** (first play) clones and starts the VM, waits for the QEMU guest agent and the
+   template's first-boot setup, and runs a PowerShell script in the guest as SYSTEM: static IP,
+   gateway, DNS servers and search list, the timezone (`timezone`, optional) and a new local
+   Administrator password. It then waits for WinRM on 5985.
+2. **windows_domain_member** (second play, over PSRP/NTLM as that Administrator) joins the domain
+   into the OU and renames the computer, adds the admin groups to local Administrators, enrolls an
+   ADCS computer certificate and binds the WinRM HTTPS listener (5986) to it, with a scheduled task
+   that rebinds it when autoenrollment renews the certificate.
+
+Afterwards the VM can be managed over PSRP with Kerberos on 5986 (as ans-defos does).
+
+| Variable | Where | Purpose |
+| --- | --- | --- |
+| `windows_admin_password` | AWX credential | New local Administrator password (replaces the template's build password on the first deploy). |
+| `domain_join_user` / `domain_join_pass` | AWX credential | Account that joins computers to the domain (`DOMAIN\user` or `user@domain`). |
+| `domain_name`, `domain_join_ou` | `group_vars/all.yml` / AWX | Domain to join and the OU for new computer accounts (per VM: `domain_join_ou`). |
+| `domain_admin_groups` | `group_vars/all.yml` / AWX | Domain groups added to local Administrators (per VM: `admin_groups`). |
+| `windows_cert_template` | `group_vars/all.yml` / AWX | ADCS template to enroll in (per VM: `cert_template`). It must issue Server Authentication certificates; see [the role README](roles/windows_domain_member/README.md#the-certificate). |
+
+The AWX execution environment needs `pypsrp` ([requirements.txt](requirements.txt)), and the
+controller must reach the new VMs on 5985 and 5986.
 
 ## Development and CI
 
