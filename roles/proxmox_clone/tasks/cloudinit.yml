@@ -111,6 +111,33 @@
     - (vm_item.ip is not defined or vm_item.ip == "")
     - existing_vm_ip | length > 0
 
+# A reused address must still be reserved in NetBox, or NetBox can hand it to something else. When the record is
+# gone, the block below reserves the same address again for this VM.
+- name: Check the reused IP is reserved in NetBox
+  ansible.builtin.uri:
+    url: >-
+      {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-addresses/?address={{ existing_vm_ip | urlencode }}
+    method: GET
+    headers:
+      Authorization: "{{ netbox_resolved_authorization }}"
+      Accept: application/json
+  register: netbox_existing_ip
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - netbox_allocate_ip | default(true) | bool
+    - existing_vm_ip | length > 0
+
+- name: Decide whether the reused IP needs reserving again
+  ansible.builtin.set_fact:
+    netbox_reserve_existing_ip: "{{ (netbox_existing_ip.json.count | default(1) | int) == 0 }}"
+
+- name: Warn that the VM's IP had no NetBox record
+  ansible.builtin.debug:
+    msg: >-
+      {{ vm_name }} already uses {{ existing_vm_ip }} (ipconfig0), but NetBox has no record of it; reserving it
+      again for this VM.
+  when: netbox_reserve_existing_ip | bool
+
 - name: Resolve NetBox IP range
   ansible.builtin.set_fact:
     netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] }}"
@@ -119,7 +146,7 @@
   when:
     - (vm_item.ip is not defined or vm_item.ip == "")
     - netbox_allocate_ip | default(true) | bool
-    - existing_vm_ip | length == 0
+    - existing_vm_ip | length == 0 or netbox_reserve_existing_ip | bool
   run_once: false
   block:
     - name: Lookup IP range
@@ -198,15 +225,31 @@
         body: "{{ netbox_ip_body }}"
         status_code: 201
       register: netbox_available_ip
+      when: not (netbox_reserve_existing_ip | bool)
 
     - name: Assert NetBox returned an available IP
       ansible.builtin.assert:
         that:
           - netbox_available_ip.json | length > 0
+      when: not (netbox_reserve_existing_ip | bool)
 
     - name: Set allocated VM IP
       ansible.builtin.set_fact:
         resolved_vm_ip: "{{ netbox_available_ip.json.address }}"
+      when: not (netbox_reserve_existing_ip | bool)
+
+    - name: Reserve the VM's existing IP in NetBox again
+      ansible.builtin.uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-addresses/"
+        method: POST
+        headers:
+          Authorization: "{{ netbox_resolved_authorization }}"
+          Accept: application/json
+        body_format: json
+        body: "{{ netbox_ip_body | combine({'address': existing_vm_ip, 'status': 'active'}) }}"
+        status_code: 201
+      when: netbox_reserve_existing_ip | bool
+      changed_when: true
 
 - name: Set final VM IP and gateway variables for later configuration
   ansible.builtin.set_fact:
