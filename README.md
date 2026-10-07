@@ -106,6 +106,39 @@ Afterwards the VM can be managed over PSRP with Kerberos on 5986 (as ans-defos d
 The AWX execution environment needs `pypsrp` ([requirements.txt](requirements.txt)), and the
 controller must reach the new VMs on 5985 and 5986.
 
+### AWX credential for the Windows Administrator password
+
+The job template's Machine credential is already used for the SSH login to the Proxmox nodes, and a job
+template takes only one Machine credential, so `windows_admin_password` comes from a custom credential type.
+
+1. Under **Administration → Credential Types → Add**, name it `Windows local administrator` and paste:
+
+   ```yaml
+   # Input configuration
+   fields:
+     - id: windows_admin_password
+       label: "Local Administrator password (new Windows VMs)"
+       type: string
+       secret: true
+   required:
+     - windows_admin_password
+   ```
+
+   ```yaml
+   # Injector configuration
+   extra_vars:
+     windows_admin_password: "{{ windows_admin_password }}"
+   ```
+
+2. Under **Resources → Credentials → Add**, create a credential of type `Windows local administrator` with the
+   password.
+3. Attach it to the `site.yml` job template, next to the Machine credential (Proxmox SSH) and the credentials
+   that supply `domain_join_user` / `domain_join_pass`, NetBox and Technitium.
+
+The password is set once, on a VM's first deploy (it replaces the template's build password), and the domain
+play then logs in with it. Changing the credential later doesn't change existing VMs; it only applies to VMs
+deployed afterwards, so re-runs against older VMs need the password they were deployed with.
+
 ## Development and CI
 
 Two workflows call reusable workflows from

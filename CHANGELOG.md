@@ -10,6 +10,8 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
   boot (`SetupComplete.done`), then sets the static IP, gateway, DNS servers and search list, the timezone and a new
   local Administrator password (`windows_admin_password`) in the guest. The cloudbase-init templates and the
   `winrm_ssl` VM option are removed.
+- Added: README instructions for the AWX credential type that injects `windows_admin_password` (the Machine
+  credential is taken by the Proxmox SSH login).
 - Added: `windows_domain_member` role, run by a second play in `site.yml` against the deployed Windows VMs over
   PSRP: joins the domain into the OU (renaming the computer), adds `domain_admin_groups` to local Administrators,
   enrolls an ADCS computer certificate from `windows_cert_template`, and serves WinRM over HTTPS on 5986 with it,
