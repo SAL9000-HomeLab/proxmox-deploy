@@ -5,6 +5,8 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Fixed: NetBox v2 API tokens (`nbt_<key>.<token>`, the default since NetBox 4.5) are sent as `Bearer`; they were
+  sent as `Token`, which NetBox rejects with "Invalid authorization header". v1 tokens still use `Token`.
 - Changed: Windows VMs no longer use cloudbase-init (the vm-templates Windows Server 2025 templates don't ship it).
   proxmox_clone configures them over the QEMU guest agent instead: it waits for the template's unattended first
   boot (`SetupComplete.done`), then sets the static IP, gateway, DNS servers and search list, the timezone and a new

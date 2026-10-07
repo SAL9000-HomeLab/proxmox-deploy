@@ -22,8 +22,8 @@ template_catalog:
   rocky9: tpl-rocky-9
   rocky10: tpl-rocky-10
   ubuntu2404: tpl-ubuntu-2404
-  windows2025_core: tpl-windows-server-2025-core
-  windows2025_desktop: tpl-windows-server-2025-desktop
+  windows2025_core: tpl-win2025-c
+  windows2025_desktop: tpl-win2025-d
 ```
 
 The deploy repo should never invent a template name on the fly. It should reference the template

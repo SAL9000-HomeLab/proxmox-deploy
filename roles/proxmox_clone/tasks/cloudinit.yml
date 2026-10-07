@@ -68,6 +68,13 @@
     netbox_resolved_token: "{{ (netbox | default({})).token | default(netbox_token | default('')) }}"
   run_once: false
 
+# v2 tokens (NetBox 4.5+) look like nbt_<key>.<token> and use Bearer; v1 tokens (deprecated in 4.6) use Token.
+- name: Build the NetBox authorization header
+  ansible.builtin.set_fact:
+    netbox_resolved_authorization: >-
+      {{ ('Bearer ' if netbox_resolved_token.startswith('nbt_') else 'Token ') ~ netbox_resolved_token }}
+  no_log: true
+
 - name: Safety-check NetBox configuration
   ansible.builtin.assert:
     that:
@@ -121,7 +128,7 @@
           {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/
         method: GET
         headers:
-          Authorization: "Token {{ netbox_resolved_token }}"
+          Authorization: "{{ netbox_resolved_authorization }}"
           Accept: application/json
       register: netbox_ip_range
 
@@ -132,7 +139,7 @@
         url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/?name={{ item | urlencode }}"
         method: GET
         headers:
-          Authorization: "Token {{ netbox_resolved_token }}"
+          Authorization: "{{ netbox_resolved_authorization }}"
           Accept: application/json
       loop: "{{ desired_tags | default([]) }}"
       register: netbox_tag_lookup
@@ -142,7 +149,7 @@
         url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/"
         method: POST
         headers:
-          Authorization: "Token {{ netbox_resolved_token }}"
+          Authorization: "{{ netbox_resolved_authorization }}"
           Accept: application/json
         body_format: json
         body:
@@ -185,7 +192,7 @@
           {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/available-ips/
         method: POST
         headers:
-          Authorization: "Token {{ netbox_resolved_token }}"
+          Authorization: "{{ netbox_resolved_authorization }}"
           Accept: application/json
         body_format: json
         body: "{{ netbox_ip_body }}"
