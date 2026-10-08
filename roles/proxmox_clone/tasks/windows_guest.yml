@@ -39,30 +39,94 @@
   changed_when: false
 
 # The vm-templates clone answer file runs specialize and OOBE unattended; SetupComplete.cmd writes this marker
-# once they're done (and the answer file holding the build password has been deleted).
-- name: Wait for the first-boot setup to finish (SetupComplete.done)
-  ansible.builtin.command:
-    argv:
-      - qm
-      - guest
-      - exec
-      - "{{ desired_vmid }}"
-      - --timeout
-      - "30"
-      - --
-      - powershell.exe
-      - -NoProfile
-      - -Command
-      - if (Test-Path "$env:SystemRoot\Setup\Scripts\SetupComplete.done") { exit 0 } else { exit 1 }
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: windows_guest_setup
-  until: >-
-    windows_guest_setup.rc == 0
-    and (windows_guest_setup.stdout | from_json).exitcode | default(1) == 0
-  retries: "{{ (proxmox_clone_wait.service_timeout | default(600) | int) // 10 }}"
-  delay: 10
-  changed_when: false
+# once they're done (and the answer file holding the build password has been deleted). If it never appears, look
+# inside the guest and say why, instead of only timing out.
+- name: Wait for the template's first-boot setup
+  block:
+    - name: Wait for the first-boot setup to finish (SetupComplete.done)
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - "{{ desired_vmid }}"
+          - --timeout
+          - "30"
+          - --
+          - powershell.exe
+          - -NoProfile
+          - -Command
+          - if (Test-Path "$env:SystemRoot\Setup\Scripts\SetupComplete.done") { exit 0 } else { exit 1 }
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: windows_guest_setup
+      until: >-
+        windows_guest_setup.rc == 0
+        and (windows_guest_setup.stdout | from_json).exitcode | default(1) == 0
+      retries: "{{ (proxmox_clone_wait.service_timeout | default(600) | int) // 10 }}"
+      delay: 10
+      changed_when: false
+  rescue:
+    - name: Inspect the guest's first-boot state
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - "{{ desired_vmid }}"
+          - --timeout
+          - "60"
+          - --
+          - powershell.exe
+          - -NoProfile
+          - -Command
+          - >-
+            $s = "$env:SystemRoot\Setup\Scripts\SetupComplete.cmd";
+            $log = "$env:SystemRoot\Panther\UnattendGC\setupact.log";
+            [pscustomobject]@{
+            computer = $env:COMPUTERNAME;
+            image_state = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State'
+            -ErrorAction SilentlyContinue).ImageState;
+            setupcomplete_exists = Test-Path $s;
+            setupcomplete_writes_marker = [bool](Select-String -Path $s -Pattern 'SetupComplete.done' -Quiet
+            -ErrorAction SilentlyContinue);
+            setup_log_tail = @(Get-Content $log -Tail 15 -ErrorAction SilentlyContinue)
+            } | ConvertTo-Json -Compress
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: windows_guest_diag
+      changed_when: false
+      failed_when: false
+
+    - name: Explain why the first-boot setup didn't finish
+      ansible.builtin.fail:
+        msg: "{{ windows_guest_diag_msg }}"
+      vars:
+        windows_guest_diag_info: >-
+          {{ ((windows_guest_diag.stdout | default('{}') | from_json)['out-data'] | default('{}') | from_json)
+             if windows_guest_diag.rc | default(1) == 0 else {} }}
+        windows_guest_diag_msg: >-
+          {{ vm_name }} (vmid {{ desired_vmid }}) never finished its first boot: no SetupComplete.done after
+          {{ proxmox_clone_wait.service_timeout | default(600) }}s.
+          {% if not windows_guest_diag_info %}Couldn't inspect the guest
+          ({{ windows_guest_diag.stderr | default(windows_guest_diag.stdout | default('')) | trim }}).
+          {% elif windows_guest_diag_info.computer | default('') | upper is search('-BUILD$') %}Its computer name is
+          {{ windows_guest_diag_info.computer }}: the clone replayed the template build's answer file, so template
+          {{ vm_item.template_vmid }} predates vm-templates' clone answer file. Rebuild it and redeploy.
+          {% elif not windows_guest_diag_info.setupcomplete_writes_marker | default(false) %}Its SetupComplete.cmd
+          {{ 'exists but' if windows_guest_diag_info.setupcomplete_exists else 'is missing, so it' }} doesn't
+          write SetupComplete.done: template {{ vm_item.template_vmid }} predates vm-templates' clone answer file.
+          Rebuild it and redeploy.
+          {% elif windows_guest_diag_info.image_state | default('') != 'IMAGE_STATE_COMPLETE' %}Windows Setup is
+          still at {{ windows_guest_diag_info.image_state | default('an unknown state') }}: OOBE is waiting or
+          failed. Check the VM's console.
+          {% else %}Setup completed ({{ windows_guest_diag_info.image_state }}) but SetupComplete.cmd didn't
+          write the marker; see the setup log below.
+          {% endif %}
+          Computer name: {{ windows_guest_diag_info.computer | default('?') }},
+          ImageState: {{ windows_guest_diag_info.image_state | default('?') }}.
+          Keep the VM for inspection. Last lines of C:\Windows\Panther\UnattendGC\setupact.log:
+          {{ windows_guest_diag_info.setup_log_tail | default([]) | join(' | ') }}
 
 # The script holds the Administrator password, so it goes to a root-only file on the node (tmpfs) and reaches
 # the guest on stdin: it never appears in a command line or in the task's logged arguments.

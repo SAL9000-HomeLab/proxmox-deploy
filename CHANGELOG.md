@@ -5,6 +5,9 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: when a Windows clone never writes `SetupComplete.done`, the role inspects the guest (computer name, Windows
+  Setup `ImageState`, its `SetupComplete.cmd`, the end of the setup log) and fails saying why, e.g. that the template
+  predates vm-templates' clone answer file, instead of only timing out.
 - Fixed: a re-run that reuses the IP already on a VM (`ipconfig0`) now checks NetBox has it, and reserves it again for
   the VM (same description, DNS name and tags) when the record is missing, so NetBox can't hand the address out.
 - Fixed: NetBox v2 API tokens (`nbt_<key>.<token>`, the default since NetBox 4.5) are sent as `Bearer`; they were
