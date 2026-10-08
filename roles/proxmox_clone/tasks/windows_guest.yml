@@ -45,6 +45,7 @@
   block:
     - name: Wait for the first-boot setup to finish (SetupComplete.done)
       ansible.builtin.command:
+        expand_argument_vars: false  # the PowerShell uses $env: and $_
         argv:
           - qm
           - guest
@@ -69,6 +70,7 @@
   rescue:
     - name: Inspect the guest's first-boot state
       ansible.builtin.command:
+        expand_argument_vars: false  # the PowerShell uses $env: and $_
         argv:
           - qm
           - guest
@@ -83,6 +85,7 @@
           - >-
             $s = "$env:SystemRoot\Setup\Scripts\SetupComplete.cmd";
             $log = "$env:SystemRoot\Panther\UnattendGC\setupact.log";
+            $sysprepErr = "$env:SystemRoot\System32\Sysprep\Panther\setuperr.log";
             [pscustomobject]@{
             computer = $env:COMPUTERNAME;
             image_state = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\State'
@@ -90,7 +93,9 @@
             setupcomplete_exists = Test-Path $s;
             setupcomplete_writes_marker = [bool](Select-String -Path $s -Pattern 'SetupComplete.done' -Quiet
             -ErrorAction SilentlyContinue);
-            setup_log_tail = @(Get-Content $log -Tail 15 -ErrorAction SilentlyContinue)
+            setup_log_tail = @(Get-Content $log -Tail 15 -ErrorAction SilentlyContinue | ForEach-Object { [string]$_ });
+            sysprep_err_tail = @(Get-Content $sysprepErr -Tail 15 -ErrorAction SilentlyContinue |
+            ForEach-Object { [string]$_ })
             } | ConvertTo-Json -Compress
       delegate_to: "{{ node_name }}"
       become: true
@@ -110,6 +115,12 @@
           {{ proxmox_clone_wait.service_timeout | default(600) }}s.
           {% if not windows_guest_diag_info %}Couldn't inspect the guest
           ({{ windows_guest_diag.stderr | default(windows_guest_diag.stdout | default('')) | trim }}).
+          {% elif windows_guest_diag_info.image_state | default('') == 'IMAGE_STATE_UNDEPLOYABLE'
+               and windows_guest_diag_info.computer | default('') | upper is search('-BUILD$') %}Template
+          {{ vm_item.template_vmid }} was never generalized: the clone still has the build's computer name
+          ({{ windows_guest_diag_info.computer }}) and ImageState IMAGE_STATE_UNDEPLOYABLE, so sysprep didn't finish
+          when the template was built and the clone skipped specialize and OOBE. Fix the sysprep failure (its
+          setuperr.log is below) and rebuild the template.
           {% elif windows_guest_diag_info.computer | default('') | upper is search('-BUILD$') %}Its computer name is
           {{ windows_guest_diag_info.computer }}: the clone replayed the template build's answer file, so template
           {{ vm_item.template_vmid }} predates vm-templates' clone answer file. Rebuild it and redeploy.
@@ -125,8 +136,11 @@
           {% endif %}
           Computer name: {{ windows_guest_diag_info.computer | default('?') }},
           ImageState: {{ windows_guest_diag_info.image_state | default('?') }}.
-          Keep the VM for inspection. Last lines of C:\Windows\Panther\UnattendGC\setupact.log:
-          {{ windows_guest_diag_info.setup_log_tail | default([]) | join(' | ') }}
+          Keep the VM for inspection.
+          Last lines of C:\Windows\System32\Sysprep\Panther\setuperr.log:
+          {{ windows_guest_diag_info.sysprep_err_tail | default([]) | join(' | ') or '(empty)' }}.
+          Last lines of C:\Windows\Panther\UnattendGC\setupact.log:
+          {{ windows_guest_diag_info.setup_log_tail | default([]) | join(' | ') or '(empty)' }}
 
 # The script holds the Administrator password, so it goes to a root-only file on the node (tmpfs) and reaches
 # the guest on stdin: it never appears in a command line or in the task's logged arguments.
