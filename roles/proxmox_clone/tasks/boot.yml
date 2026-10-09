@@ -22,13 +22,19 @@
   changed_when: qm_start.rc == 0
   when: "'status: running' not in qm_status.stdout"
 
+- name: Configure the Windows guest over the QEMU guest agent
+  ansible.builtin.include_tasks: windows_guest.yml
+  when: cloud_type == 'windows'
+
 - name: Wait for guest to accept connections (linux => SSH, windows => WinRM)
   when: vm_ip is defined and vm_ip | length > 0
   block:
-    - name: Wait for TCP port for guest (linux:22 windows:5985/5986)
+    # Windows: WinRM over HTTP (Kerberos/NTLM only). The HTTPS listener on 5986 comes later, from the
+    # windows_domain_member play, once the VM has its domain certificate.
+    - name: Wait for TCP port for guest (linux:22 windows:5985)
       ansible.builtin.wait_for:
         host: "{{ vm_ip | regex_replace('/\\d+$', '') }}"
-        port: "{{ 5986 if vm_item.winrm_ssl | default(False) else (5985 if cloud_type == 'windows' else 22) }}"
+        port: "{{ 5985 if cloud_type == 'windows' else 22 }}"
         timeout: "{{ proxmox_clone_wait.service_timeout | default(600) }}"
         state: started
         delay: 10
@@ -46,11 +52,9 @@
           delegate_to: localhost
           changed_when: false
 
-        - name: Check Windows using winrm (win_ping) - requires pywinrm & connection
+        - name: Report that WinRM is reachable (the windows_domain_member play connects next)
           ansible.builtin.debug:
-            msg: >-
-              WinRM reachable on {{ resolved_vm_ip | regex_replace('/\d+$', '') }}
-              (win_ping should be executed by a follow-up Windows play with connection: winrm)
+            msg: "WinRM reachable on {{ vm_ip_address }} ({{ vm_name }})"
           when: cloud_type == 'windows'
       rescue:
         - name: Warn that service check failed

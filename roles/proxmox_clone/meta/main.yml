@@ -1,7 +1,7 @@
 ---
 galaxy_info:
   author: Roland Serman
-  description: Clone VMs from Proxmox templates via ssh (qm) with cloud-init / cloudbase-init
+  description: Clone VMs from Proxmox templates via ssh (qm), with cloud-init (Linux) or the QEMU guest agent (Windows)
   license: MIT
   min_ansible_version: "2.12"
   platforms:

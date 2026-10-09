@@ -6,3 +6,12 @@
     - role: proxmox_clone
       proxmox: "{{ proxmox | default({}) }}"
       provision_vms: "{{ provision_vms }}"
+
+# proxmox_clone adds every Windows VM it deployed to proxmox_deploy_windows, with a PSRP (NTLM over HTTP)
+# connection as the local Administrator. This play joins them to the domain and sets up WinRM over HTTPS, after
+# which other repositories can manage them over PSRP with Kerberos on 5986.
+- name: Join the deployed Windows VMs to the domain and serve WinRM over HTTPS
+  hosts: proxmox_deploy_windows
+  gather_facts: false
+  roles:
+    - role: windows_domain_member

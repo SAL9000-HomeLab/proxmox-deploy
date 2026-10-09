@@ -51,7 +51,6 @@ provision_vms: []
 #   linked_clone: false  # default; true = linked clone on the template's storage
 #   vmid: null
 #   node: pve01.lab.example.com
-#   os_type: linux
 #   description: "Internal web server for team X"
 #   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP;
 #                          # defaults to dns_zone, then technitium_dns.zone

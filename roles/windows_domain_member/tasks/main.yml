@@ -1,0 +1,125 @@
+---
+# roles/windows_domain_member/tasks/main.yml
+
+- name: Work out the computer's FQDN and the join account
+  ansible.builtin.set_fact:
+    windows_domain_member_fqdn: "{{ (windows_domain_member_hostname ~ '.' ~ windows_domain_member_domain) | lower }}"
+    # DOMAIN\user or user@domain as given; a bare user name gets @<domain>. (A regex, because Jinja string
+    # literals don't unescape backslashes.)
+    windows_domain_member_join_account: >-
+      {{ windows_domain_member_join_user
+         if windows_domain_member_join_user is search('[@\\\\]')
+         else windows_domain_member_join_user ~ '@' ~ windows_domain_member_domain }}
+
+- name: Wait for WinRM
+  ansible.builtin.wait_for_connection:
+    timeout: 600
+
+# Renames the computer and joins it in one step, then reboots. A computer already in the domain is left alone.
+- name: Join the domain
+  microsoft.ad.membership:
+    dns_domain_name: "{{ windows_domain_member_domain }}"
+    hostname: "{{ windows_domain_member_hostname }}"
+    domain_admin_user: "{{ windows_domain_member_join_account }}"
+    domain_admin_password: "{{ windows_domain_member_join_password }}"
+    domain_ou_path: "{{ windows_domain_member_ou if windows_domain_member_ou | length > 0 else omit }}"
+    state: domain
+    reboot: true
+    reboot_timeout: "{{ windows_domain_member_reboot_timeout }}"
+
+- name: Add the domain groups to the local Administrators group
+  ansible.windows.win_group_membership:
+    name: Administrators
+    members: "{{ windows_domain_member_admin_groups }}"
+    state: present
+  when: windows_domain_member_admin_groups | length > 0
+
+- name: Serve WinRM over HTTPS with the computer's certificate
+  when: windows_domain_member_winrm_https | bool
+  block:
+    - name: Create the script directory
+      ansible.windows.win_file:
+        path: "{{ windows_domain_member_script_dir }}"
+        state: directory
+
+    - name: Install the WinRM HTTPS listener script
+      ansible.windows.win_copy:
+        src: Set-WinRMHttpsListener.ps1
+        dest: '{{ windows_domain_member_script_dir }}\Set-WinRMHttpsListener.ps1'
+
+    # As SYSTEM, so the certificate request runs in machine context with the computer account.
+    - name: Enroll the computer certificate if needed and bind the HTTPS listener to it
+      ansible.windows.win_powershell:
+        script: |
+          param([string]$Script, [string]$DnsName, [string]$Template)
+          $result = & $Script -DnsName $DnsName -Template $Template | ConvertFrom-Json
+          $Ansible.Changed = $result.changed
+          $Ansible.Result = $result
+        parameters:
+          Script: '{{ windows_domain_member_script_dir }}\Set-WinRMHttpsListener.ps1'
+          DnsName: "{{ windows_domain_member_fqdn }}"
+          Template: "{{ windows_domain_member_cert_template }}"
+      become: true
+      become_method: ansible.builtin.runas
+      become_user: SYSTEM
+      register: windows_domain_member_listener
+
+    - name: Allow WinRM over HTTPS through the firewall
+      community.windows.win_firewall_rule:
+        name: WinRM-HTTPS
+        description: WinRM over HTTPS (proxmox-deploy)
+        localport: 5986
+        protocol: tcp
+        direction: in
+        action: allow
+        profiles: [domain, private, public]
+        state: present
+        enabled: true
+
+    - name: Rebind the listener when autoenrollment renews the certificate
+      community.windows.win_scheduled_task:
+        name: WinRM HTTPS listener
+        path: \proxmox-deploy\
+        description: >-
+          Keeps the WinRM HTTPS listener bound to the current computer certificate (renewal changes its
+          thumbprint). Installed by proxmox-deploy.
+        actions:
+          - path: powershell.exe
+            arguments: >-
+              -NoProfile -NonInteractive -ExecutionPolicy Bypass
+              -File "{{ windows_domain_member_script_dir }}\Set-WinRMHttpsListener.ps1"
+              -DnsName {{ windows_domain_member_fqdn }}
+              {{ ('-Template ' ~ windows_domain_member_cert_template) if windows_domain_member_cert_template else '' }}
+        triggers:
+          - type: boot
+            delay: PT2M
+          - type: daily
+            start_boundary: "2026-01-01T03:15:00"
+          # Event 1001: autoenrollment replaced a certificate (a renewal).
+          - type: event
+            subscription: >-
+              <QueryList><Query Id="0" Path="{{ windows_domain_member_cert_event_log }}">
+              <Select Path="{{ windows_domain_member_cert_event_log }}">*[System[EventID=1001]]</Select>
+              </Query></QueryList>
+        username: SYSTEM
+        run_level: highest
+      vars:
+        windows_domain_member_cert_event_log: Microsoft-Windows-CertificateServicesClient-Lifecycle-System/Operational
+        state: present
+        enabled: true
+
+    - name: Check WinRM over HTTPS answers from the controller
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: 5986
+        timeout: 120
+      delegate_to: localhost
+
+    - name: Show the WinRM HTTPS certificate
+      ansible.builtin.debug:
+        msg: >-
+          WinRM HTTPS on {{ windows_domain_member_fqdn }}:5986 uses certificate
+          {{ windows_domain_member_listener.result.thumbprint }} (expires
+          {{ windows_domain_member_listener.result.expires }}){{
+          ', newly enrolled from ' ~ windows_domain_member_cert_template
+          if windows_domain_member_listener.result.enrolled else '' }}.

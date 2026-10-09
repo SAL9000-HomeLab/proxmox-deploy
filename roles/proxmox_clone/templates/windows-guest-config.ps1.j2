@@ -1,0 +1,73 @@
+# Rendered by roles/proxmox_clone/tasks/windows_guest.yml and run inside the guest as SYSTEM through the QEMU
+# guest agent (qm guest exec, script on stdin so the password never appears on a command line). Configures what
+# the vm-templates clone answer file leaves to the deploy: the static IPv4 address, DNS servers and search list,
+# the timezone and the local Administrator password. Idempotent: prints one line of JSON saying what it changed.
+$ErrorActionPreference = 'Stop'
+$changes = [System.Collections.Generic.List[string]]::new()
+
+$mac      = '{{ windows_guest_mac }}'
+$ip       = '{{ vm_ip_address }}'
+$prefix   = {{ vm_ip.split('/')[1] | int }}
+$gateway  = '{{ vm_gateway | default('', true) }}'
+$dns      = @({{ vm_item.dns_servers | default([]) | map('to_json') | join(', ') }})
+$suffixes = @({{ vm_item.search_domains | default([]) | map('to_json') | join(', ') }})
+$timezone = '{{ vm_item.timezone | default('', true) }}'
+
+$adapter = Get-NetAdapter | Where-Object { $_.MacAddress -eq $mac }
+if (-not $adapter) { throw "No network adapter with MAC $mac" }
+$ifIndex = $adapter.ifIndex
+
+# --- Static IPv4 address and default gateway ---
+$addresses = @(Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.PrefixOrigin -ne 'WellKnown' })
+$routes = @(Get-NetRoute -InterfaceIndex $ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)
+$dhcp = (Get-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4).Dhcp
+$addressOk = $dhcp -eq 'Disabled' -and $addresses.Count -eq 1 -and $addresses[0].IPAddress -eq $ip -and
+    $addresses[0].PrefixLength -eq $prefix
+$gatewayOk = if ($gateway) { $routes.Count -eq 1 -and $routes[0].NextHop -eq $gateway } else { $routes.Count -eq 0 }
+if (-not ($addressOk -and $gatewayOk)) {
+    Set-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4 -Dhcp Disabled
+    $addresses | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    $routes | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    $params = @{ InterfaceIndex = $ifIndex; AddressFamily = 'IPv4'; IPAddress = $ip; PrefixLength = $prefix }
+    if ($gateway) { $params.DefaultGateway = $gateway }
+    New-NetIPAddress @params | Out-Null
+    $changes.Add("address $ip/$prefix gateway $gateway")
+}
+
+# --- DNS servers and search list ---
+if ($dns.Count -gt 0) {
+    $current = (Get-DnsClientServerAddress -InterfaceIndex $ifIndex -AddressFamily IPv4).ServerAddresses
+    if (($current -join ',') -ne ($dns -join ',')) {
+        Set-DnsClientServerAddress -InterfaceIndex $ifIndex -ServerAddresses $dns
+        $changes.Add("dns $($dns -join ',')")
+    }
+}
+if ($suffixes.Count -gt 0) {
+    $current = (Get-DnsClientGlobalSetting).SuffixSearchList
+    if (($current -join ',') -ne ($suffixes -join ',')) {
+        Set-DnsClientGlobalSetting -SuffixSearchList $suffixes
+        $changes.Add("search list $($suffixes -join ',')")
+    }
+}
+
+# --- Timezone (a Windows time zone ID, e.g. "Eastern Standard Time") ---
+if ($timezone -and (Get-TimeZone).Id -ne $timezone) {
+    Set-TimeZone -Id $timezone
+    $changes.Add("timezone $timezone")
+}
+
+# --- Local Administrator password (built-in account, RID 500) ---
+# Set once: the template's build password is replaced on the first deploy. Later runs leave it alone, so a
+# password rotated afterwards (by hand or Windows LAPS) isn't overwritten.
+$marker = Join-Path $env:ProgramData 'proxmox-deploy\admin-password.set'
+if (-not (Test-Path $marker)) {
+    $admin = Get-LocalUser | Where-Object { $_.SID.Value -like 'S-1-5-21-*-500' }
+    $password = ConvertTo-SecureString -String '{{ windows_admin_password | replace("'", "''") }}' -AsPlainText -Force
+    $admin | Set-LocalUser -Password $password -PasswordNeverExpires $true
+    $admin | Enable-LocalUser
+    New-Item -ItemType File -Path $marker -Force | Out-Null
+    $changes.Add("administrator password")
+}
+
+[pscustomobject]@{ changed = $changes.Count -gt 0; changes = @($changes) } | ConvertTo-Json -Compress

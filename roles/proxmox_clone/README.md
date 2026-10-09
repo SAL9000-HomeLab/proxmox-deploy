@@ -1,6 +1,7 @@
 # proxmox_clone role
 
-Purpose: clone VMs from Proxmox templates using SSH (`qm`) and cloud-init/cloudbase-init snippets.
+Purpose: clone VMs from Proxmox templates using SSH (`qm`), and configure them with a cloud-init snippet
+(Linux) or over the QEMU guest agent (Windows).
 
 Features:
 
@@ -11,8 +12,10 @@ Features:
   only runs `qm set`/resize when something actually differs
 - Optional NetBox IP allocation when `ip` isn't supplied — carries `description`, `domain`
   (as `dns_name`), and `tags` from `provision_vms` onto the NetBox IP reservation
+- Windows: configures the guest over the QEMU guest agent (static IP, DNS, timezone, a new local
+  Administrator password), then hands the VM to the [windows_domain_member](../windows_domain_member/README.md)
+  play (domain join, local admins, ADCS certificate, WinRM over HTTPS)
 - Waits for OS availability (SSH/WinRM) after starting a newly-cloned VM
-- Uses Jinja2 templates for cloud-init and cloudbase-init userdata
 
 Task layout (`tasks/`):
 
@@ -21,10 +24,13 @@ Task layout (`tasks/`):
 - `resolve_vars.yml` — resolves per-VM settings and the target vmid
 - `clone.yml` — clones the template (if needed) and gathers `qm config`
 - `configure.yml` — reconciles cores/memory, network/VLAN, tags, description, disk size
-- `cloudinit.yml` — renders/uploads the userdata snippet, allocates a NetBox IP if needed,
-  reconciles cicustom/ipconfig/DNS
+- `cloudinit.yml` — renders/uploads the Linux userdata snippet, allocates a NetBox IP if needed,
+  reconciles cicustom/ipconfig/DNS (Windows VMs get ipconfig/DNS only, so re-runs reuse their IP)
 - `technitium_dns.yml` — creates the VM's Technitium A and associated PTR records when enabled
-- `boot.yml` — starts the VM and waits for the guest to become reachable
+- `boot.yml` — starts the VM, runs `windows_guest.yml` for Windows, and waits for SSH (22) or WinRM (5985)
+- `windows_guest.yml` — Windows only: waits for the guest agent and for the template's first-boot setup
+  (`SetupComplete.done`), runs `templates/windows-guest-config.ps1.j2` in the guest as SYSTEM, and adds the
+  VM to the `proxmox_deploy_windows` group for the next play
 
 Usage:
 
@@ -38,7 +44,11 @@ Variable reference:
   - `name` (required), `template_vmid` (required), `vmid` (optional — auto-allocated via
     `qm nextid` when omitted or `0`), `node` (optional, falls back to `proxmox.node` /
     `proxmox_defaults.node`), `storage` (optional, falls back to `proxmox.storage` /
-    `proxmox_defaults.storage`), `os_type` (`linux` or `windows`, default `linux`).
+    `proxmox_defaults.storage`).
+  - OS: read from the template's Proxmox OS type (`ostype`). A Windows type (`win11`, `win10`, `w2k8`, … —
+    all start with `w`) makes the VM Windows; anything else (`l26`, or `other` when the template doesn't set one)
+    makes it Linux. The job log shows the result (`W25C-TEST001: windows (template 9001 ostype win11)`). `os_type`
+    (`linux` or `windows`) on the VM overrides it; it's only needed for a template with a misleading `ostype`.
   - Name casing: `name` is uppercased for the Proxmox VM name and the NetBox `dns_name`, whatever
     case it's given in. The hostname set inside the guest (`hostname`, or `name` when that's unset)
     is lowercased on Linux and uppercased on Windows.
@@ -60,7 +70,7 @@ Variable reference:
   - `ip` (must include a CIDR prefix, e.g. `10.0.30.25/24` — Proxmox's `ipconfig0` rejects
     a bare IP), `gateway`, `dns_servers` (list), `search_domains` (list), `hostname`,
     `ssh_authorized_keys` (list, Linux only today — added to `linux_admin_user` on top of
-    `linux_admin_ssh_keys`; see Templates note below), `winrm_ssl`.
+    `linux_admin_ssh_keys`; see Templates note below).
   - `linked_clone`: `true` for a linked clone, `false` (default) for a full clone. Falls back to
     `proxmox_clone_behavior.linked_clone`, then `proxmox.linked_clone`, then `false`. Linked
     clones share the template's base disk: they're created on the template's storage (the
@@ -76,8 +86,11 @@ Variable reference:
     the uppercased `name` as `<NAME>.<domain>` and set as the `dns_name` on that NetBox IP address reservation.
     Falls back to `dns_zone`, then `technitium_dns.zone`; with none of them set, no `dns_name` is sent.
     (Unrelated to the Windows domain-join variables below, despite the similar name.)
-  - `timezone`: Windows only — passed to cloudbase-init as `set_timezone`. Linux VMs are
-    currently hardcoded to `UTC` in `templates/linux-user-data.j2`, regardless of this field.
+  - `timezone`: Windows only — a Windows time zone ID (e.g. `Eastern Standard Time`) set in the guest.
+    Unset leaves the template's UTC. Linux VMs are currently hardcoded to `UTC` in
+    `templates/linux-user-data.j2`, regardless of this field.
+  - `domain_join_ou`, `admin_groups` (list), `cert_template`: Windows only — per-VM overrides of the
+    [windows_domain_member](../windows_domain_member/README.md) OU, local admin groups and ADCS template.
   - `dns`: Linux only — a single nameserver string, used as a fallback in
     `templates/linux-user-data.j2` when `dns_servers` isn't set. Doesn't affect the Proxmox
     `--nameserver` config (which only reads `dns_servers`).
@@ -105,22 +118,22 @@ Variable reference:
   - `netbox`: API connection settings with `api_url`, `token`, and optional `ssl_verify`
     (defaults to `true`). `netbox_api_url` / `netbox_token` are accepted as flat fallbacks if
     `netbox.api_url` / `netbox.token` aren't set.
-- Windows domain-join variables (consumed directly by `templates/windows-cloudbase-init-userdata.j2`,
-  not part of `provision_vms` items): `domain_name`, `domain_join_ou`, `domain_admin_group`,
-  `domain_join_user`, `domain_join_pass`. `domain_name`/`domain_join_ou`/`domain_admin_group` are
-  set in `group_vars/all.yml`; `domain_join_user`/`domain_join_pass` are not defined anywhere in
-  this repo today and must be supplied as extra vars (e.g. via an AWX credential injected into the
-  job) — `site.yml` does not load a credentials file for these.
+- Windows credentials (not part of `provision_vms` items; supply them from AWX credentials, the play
+  fails before cloning a Windows VM without them):
+  - `windows_admin_password`: the new local Administrator password, set once on the first deploy (it
+    replaces the template's build password; later runs leave it alone). The domain play connects with it.
+  - `domain_join_user` / `domain_join_pass`: the account that joins the VM to the domain.
+  - The domain settings themselves (`domain_name`, `domain_join_ou`, `domain_admin_groups`,
+    `windows_cert_template`) are read by [windows_domain_member](../windows_domain_member/README.md).
 
 Templates:
 
-- `templates/linux-user-data.j2` and `templates/windows-cloudbase-init-userdata.j2` are the only
-  two templates actually rendered (selected by `os_type` in `cloudinit.yml`).
+- `templates/linux-user-data.j2` is the Linux cloud-init userdata. `templates/windows-guest-config.ps1.j2`
+  is the PowerShell `windows_guest.yml` runs in Windows guests: it's written to a root-only file in `/run` on
+  the node and reaches the guest on stdin (`qm guest exec --pass-stdin`), so the password is never on a
+  command line, and it's deleted straight after.
 - `files/grow-root-fs.sh` is embedded in the Linux user-data as `/usr/local/sbin/grow-root-fs` and run
   by `runcmd`. The same script is in ans-cleanup (`roles/grow_root_fs/files/`); keep the two identical.
-- `templates/ref.j2` is an inactive reference/scratch template (not selected by any task) sketching
-  possible future cloudbase-init options (`local_groups`, `admin_user`/`admin_groups`/`admin_password`,
-  `ntp_servers`, Windows `ssh_authorized_keys`). None of those fields currently have any effect.
 
 AWX example:
 
@@ -129,11 +142,11 @@ provision_vms:
   - name: W25C-TEST001
     description: "test vm deployment"
     domain: "lab.example.com"
-    template_vmid: 9002
+    template_vmid: 9002  # tpl-windows-server-2025-core
+    domain_join_ou: "OU=Build,OU=Servers,DC=ad,DC=example,DC=com"  # optional, overrides domain_join_ou
     node: pve01.lab.example.com
     vmid: 3021
     disk_target: scsi0
-    os_type: windows
     net_bridge: vnet30
     # ip: 10.0.30.25/24
     # gateway: 10.0.30.1
@@ -178,5 +191,8 @@ netbox:
 
 Dependencies:
 
-- Control host: none strictly required for the SSH flow (but you may want `pywinrm` if you plan to run Windows modules later)
+- Control host: none for the SSH flow. The Windows domain play needs `pypsrp` (see the repository's
+  `requirements.txt`) and the `ansible.windows`, `community.windows` and `microsoft.ad` collections.
 - Proxmox node: `qm` CLI must be available and accessible via SSH
+- Windows templates: built by vm-templates with the clone answer file (QEMU guest agent installed, OOBE
+  unattended, `SetupComplete.done` written on first boot)

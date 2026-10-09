@@ -1,8 +1,19 @@
 ---
+# Windows VMs: read by the windows_domain_member role (see roles/windows_domain_member/README.md).
+# The credentials (windows_admin_password, domain_join_user, domain_join_pass) come from AWX credentials.
+#
+# These are placeholders. Playbook group_vars outrank AWX/Ascender inventory variables, so set the real values
+# as job template extra vars (see README.md, "Windows VMs").
+
 domain_name: "ad.example.com"
 
-# OU where the VM should be created
+# OU where the VM's computer account is created (per VM: domain_join_ou)
 domain_join_ou: "OU=Build,OU=Servers,OU=Resources,DC=ad,DC=example,DC=com"
 
-# Local admin group to add the domain group to (e.g. "Administrators")
-domain_admin_group: "EXAMPLE\\ServerAdmins"
+# Domain groups added to each VM's local Administrators group (per VM: admin_groups)
+domain_admin_groups:
+  - 'EXAMPLE\ServerAdmins'
+
+# ADCS certificate template (name, not display name) for the WinRM HTTPS certificate (per VM: cert_template).
+# It must issue certificates with the Server Authentication EKU and the computer's FQDN as a DNS name.
+windows_cert_template: "ExampleServerAuthentication"
