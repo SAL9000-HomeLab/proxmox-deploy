@@ -5,6 +5,9 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: README sections on the inventory (the `proxmox` group, `node` after a VM migration), why the domain and
+  NetBox variables must be job extra vars (playbook `group_vars` outrank inventory variables), and troubleshooting
+  Windows deployments (first-boot diagnostics, the certificate subject, `qm guest exec` quoting).
 - Fixed: the WinRM HTTPS listener needs a certificate whose subject CN names the computer (WinRM ignores the subject
   alternative name, and fails with "An internal error occurred" on an empty subject). Certificates without one are
   skipped and a new one enrolled; the listener's hostname is the certificate's CN (FQDN or computer name).

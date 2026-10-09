@@ -97,14 +97,31 @@ Afterwards the VM can be managed over PSRP with Kerberos on 5986 (as ans-defos d
 
 | Variable | Where | Purpose |
 | --- | --- | --- |
-| `windows_admin_password` | AWX credential | New local Administrator password (replaces the template's build password on the first deploy). |
-| `domain_join_user` / `domain_join_pass` | AWX credential | Account that joins computers to the domain (`DOMAIN\user` or `user@domain`). |
-| `domain_name`, `domain_join_ou` | `group_vars/all.yml` / AWX | Domain to join and the OU for new computer accounts (per VM: `domain_join_ou`). |
-| `domain_admin_groups` | `group_vars/all.yml` / AWX | Domain groups added to local Administrators (per VM: `admin_groups`). |
-| `windows_cert_template` | `group_vars/all.yml` / AWX | ADCS template to enroll in (per VM: `cert_template`). It must issue Server Authentication certificates; see [the role README](roles/windows_domain_member/README.md#the-certificate). |
+| `windows_admin_password` | Credential | New local Administrator password (replaces the template's build password on the first deploy). |
+| `domain_join_user` / `domain_join_pass` | Credential | Account that joins computers to the domain (`DOMAIN\user` or `user@domain`). |
+| `domain_name`, `domain_join_ou` | Job extra vars | Domain to join and the OU for new computer accounts (per VM: `domain_join_ou`). |
+| `domain_admin_groups` | Job extra vars | Domain groups added to local Administrators (per VM: `admin_groups`). |
+| `windows_cert_template` | Job extra vars | ADCS template to enroll in (per VM: `cert_template`). See [the certificate requirements](roles/windows_domain_member/README.md#the-certificate): Server Authentication, and subject name format **Common name**. |
 
-The AWX execution environment needs `pypsrp` ([requirements.txt](requirements.txt)), and the
-controller must reach the new VMs on 5985 and 5986.
+Set the domain variables (and the NetBox maps, `netbox_ip_ranges_by_bridge` / `netbox_gateway_by_bridge`) as
+**job template extra vars**, not as inventory variables. The placeholder values in this repository's
+`group_vars/` sit next to `site.yml`, and Ansible ranks playbook `group_vars` above an AWX/Ascender
+inventory's own variables, so inventory values are silently ignored. Only extra vars outrank them. A
+`technitium_dns` or `proxmox` dictionary in extra vars replaces the repository's whole dictionary (no merge).
+
+The execution environment needs `pypsrp` ([requirements.txt](requirements.txt)), and the controller must reach
+the new VMs on 5985 and 5986. Tested with Ascender (an AWX distribution) running `site.yml`.
+
+### Inventory
+
+`site.yml`'s first play targets the inventory group **`proxmox`**: put every Proxmox node a VM can be deployed to
+in it (`ansible_user: root`, `ansible_python_interpreter: /usr/bin/python3`), with the node's SSH key as the job's
+Machine credential. A VM's `node` must be one of those host names exactly, because every `qm` command runs on it.
+The second play's group (`proxmox_deploy_windows`) is filled by the first and needs no inventory entry.
+
+`qm list` only shows the VMs on its own node. When a VM has been migrated to another node, set its `node` to the
+node it's on now before re-running the job for it; otherwise the role looks for it on the old node, finds nothing
+and tries to clone it again.
 
 ### AWX credential for the Windows Administrator password
 
@@ -138,6 +155,34 @@ template takes only one Machine credential, so `windows_admin_password` comes fr
 The password is set once, on a VM's first deploy (it replaces the template's build password), and the domain
 play then logs in with it. Changing the credential later doesn't change existing VMs; it only applies to VMs
 deployed afterwards, so re-runs against older VMs need the password they were deployed with.
+
+## Troubleshooting Windows deployments
+
+- **"never finished its first boot: no SetupComplete.done"**: the role looked inside the guest and says why:
+  - _was never generalized_ (the clone has the build's computer name and `IMAGE_STATE_UNDEPLOYABLE`): sysprep
+    didn't finish when the template was built. Rebuild the template; current vm-templates fails the build when
+    sysprep doesn't generalize.
+  - _replayed the template build's answer file_ / _SetupComplete.cmd doesn't write SetupComplete.done_: the
+    template predates vm-templates' clone answer file. Rebuild it.
+  - _Windows Setup is still at …_: OOBE is waiting or failed; check the VM's console.
+
+  Keep the VM until you've looked: delete it (and its NetBox and DNS records) only before the redeploy.
+- **"An internal error occurred" creating the WinRM HTTPS listener**: the certificate has no subject CN. Set the
+  ADCS template's subject name format to **Common name** and re-run; the role skips the CN-less certificate and
+  enrolls a new one.
+- **A re-run reuses an IP NetBox doesn't know**: the address in the VM's `ipconfig0` is reserved again in NetBox
+  for the VM (the job log warns). To get a new address instead, `qm set <vmid> --delete ipconfig0` first.
+- **Looking inside a VM** without network access: `qm guest exec` runs commands as SYSTEM over the guest agent.
+  Single-quote the PowerShell for bash (in double quotes, bash treats a backtick as command substitution), and
+  unwrap the JSON output:
+
+  ```shell
+  vmid=$(qm list | awk 'toupper($2) == "W25C-TEST001" {print $1}')
+  qm guest exec "$vmid" --timeout 60 -- powershell.exe -NoProfile -Command 'hostname; Get-ChildItem Cert:\LocalMachine\My | Format-List Subject, Thumbprint, NotAfter' \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("out-data","")); print(d.get("err-data",""))'
+  ```
+
+  Run it on the node the VM is on now (`qm list` on each node).
 
 ## Development and CI
 
