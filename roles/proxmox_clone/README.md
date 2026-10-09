@@ -44,7 +44,11 @@ Variable reference:
   - `name` (required), `template_vmid` (required), `vmid` (optional — auto-allocated via
     `qm nextid` when omitted or `0`), `node` (optional, falls back to `proxmox.node` /
     `proxmox_defaults.node`), `storage` (optional, falls back to `proxmox.storage` /
-    `proxmox_defaults.storage`), `os_type` (`linux` or `windows`, default `linux`).
+    `proxmox_defaults.storage`).
+  - OS: read from the template's Proxmox OS type (`ostype`). A Windows type (`win11`, `win10`, `w2k8`, … —
+    all start with `w`) makes the VM Windows; anything else (`l26`, or `other` when the template doesn't set one)
+    makes it Linux. The job log shows the result (`W25C-TEST001: windows (template 9001 ostype win11)`). `os_type`
+    (`linux` or `windows`) on the VM overrides it; it's only needed for a template with a misleading `ostype`.
   - Name casing: `name` is uppercased for the Proxmox VM name and the NetBox `dns_name`, whatever
     case it's given in. The hostname set inside the guest (`hostname`, or `name` when that's unset)
     is lowercased on Linux and uppercased on Windows.
@@ -143,7 +147,6 @@ provision_vms:
     node: pve01.lab.example.com
     vmid: 3021
     disk_target: scsi0
-    os_type: windows
     net_bridge: vnet30
     # ip: 10.0.30.25/24
     # gateway: 10.0.30.1

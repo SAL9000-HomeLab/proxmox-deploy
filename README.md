@@ -39,7 +39,6 @@ provision_vms:
     node: pve01.lab.example.com
     vmid: 3101
     disk_target: scsi0
-    os_type: linux
     net_bridge: vnet30
     ip: 10.0.30.11/24
     gateway: 10.0.30.1

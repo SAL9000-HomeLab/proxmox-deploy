@@ -5,6 +5,8 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Changed: a VM's OS (Linux or Windows) comes from its template's Proxmox OS type (`ostype` starting with `w` =
+  Windows), so `os_type` is no longer needed on each VM; it's still accepted as an override. Removed from the examples.
 - Added: README sections on the inventory (the `proxmox` group, `node` after a VM migration), why the domain and
   NetBox variables must be job extra vars (playbook `group_vars` outrank inventory variables), and troubleshooting
   Windows deployments (first-boot diagnostics, the certificate subject, `qm guest exec` quoting).
