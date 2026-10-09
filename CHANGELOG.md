@@ -5,6 +5,9 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Changed: the README's extra vars example is the minimum a deploy needs (one Linux and one Windows VM), with the
+  optional per-VM settings and their defaults in a table; `template`, `disk_target` and a per-VM `net_bridge` are
+  dropped (unused or defaulted), and the Technitium keys that have no suitable default are listed.
 - Changed: a VM's OS (Linux or Windows) comes from its template's Proxmox OS type (`ostype` starting with `w` =
   Windows), so `os_type` is no longer needed on each VM; it's still accepted as an override. Removed from the examples.
 - Added: README sections on the inventory (the `proxmox` group, `node` after a VM migration), why the domain and

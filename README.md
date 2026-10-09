@@ -14,8 +14,10 @@ AWX inventory and job extra vars, or local files that are gitignored (`local/`,
 
 ## Template catalog contract
 
-The image-building repo owns the template identity. This repo consumes those canonical template
-names and applies runtime values such as VM name, IP, gateway, DNS, and tags at deployment time.
+The image-building repo (vm-templates) owns the templates. A VM names its template by VMID
+(`template_vmid`); this repo applies the per-VM values such as name, IP, gateway, DNS and tags at
+deployment time. The template names below are a reference for which VMID is which: nothing reads
+`template_catalog` or a VM's `template` field.
 
 ```yaml
 template_catalog:
@@ -26,44 +28,68 @@ template_catalog:
   windows2025_desktop: tpl-win2025-d
 ```
 
-The deploy repo should never invent a template name on the fly. It should reference the template
-name already created in the VM template repo and then set per-instance values separately.
+The deploy repo never creates templates; it only clones the ones vm-templates built.
 
-Example AWX extra vars:
+Minimal job extra vars, one Linux and one Windows VM. Each VM's OS comes from its template's `ostype`, and its IP
+from NetBox:
 
 ```yaml
 provision_vms:
   - name: rocky10-web-01
-    template: tpl-rocky-10
-    template_vmid: 10001
-    node: pve01.lab.example.com
-    vmid: 3101
-    disk_target: scsi0
-    net_bridge: vnet30
-    ip: 10.0.30.11/24
-    gateway: 10.0.30.1
-    dns_servers:
+    template_vmid: 10001            # the vm-templates template to clone
+  - name: W25C-WEB01
+    template_vmid: 9001
+    dns_servers:                    # Windows: the domain's DNS servers, needed to join the domain
       - 10.0.30.101
       - 10.0.30.111
-    search_domains:
-      - lab.example.com
-    cores: 2
-    memory: 4096
-    disk_size: 40G
-    tags:
-      - rocky
-      - linux
-      - web
+
 proxmox:
-  storage: nfs_ssd
+  node: pve01.lab.example.com       # inventory host in the proxmox group; or `node` per VM
+  storage: vm-pool
   net_bridge: vnet30
 
+# NetBox range and gateway per bridge (the repository's group_vars only hold placeholders)
+netbox_ip_ranges_by_bridge:
+  vnet30: 19
+netbox_gateway_by_bridge:
+  vnet30: 10.0.30.1
+
+# Linux VMs: the only way to log in (see below)
+linux_admin_ssh_keys:
+  - "ssh-ed25519 AAAA... admin@example.com"
+
+# Windows VMs (see "Windows VMs")
+domain_name: ad.example.com
+domain_join_ou: "OU=Build,OU=Servers,DC=ad,DC=example,DC=com"
+domain_admin_groups: ['EXAMPLE\ServerAdmins']
+windows_cert_template: ExampleServerAuthentication
+```
+
+Optional per-VM settings, with what happens when they're left out:
+
+| Setting | Default |
+| --- | --- |
+| `node` | `proxmox.node` |
+| `vmid` | next free VMID (`qm nextid`) |
+| `ip` (CIDR, e.g. `10.0.30.11/24`), `gateway` | allocated from NetBox; gateway from `netbox_gateway_by_bridge` |
+| `dns_servers`, `search_domains` | none (Linux: DHCP/template; Windows needs `dns_servers`) |
+| `cores`, `memory` | 2 cores, 2048 MB |
+| `disk_size` (e.g. `80G`, grow only) | the template's disk size |
+| `net_bridge`, `vlan`, `storage` | `proxmox.net_bridge`, none, `proxmox.storage` |
+| `tags`, `description` | none (applied in Proxmox, and in NetBox when it allocates the IP) |
+| `linked_clone` | `false` (full clone) |
+| `os_type` | from the template's `ostype` |
+| `timezone` (Windows ID) | UTC |
+| `domain_join_ou`, `admin_groups`, `cert_template` | the job-wide Windows settings |
+
+To also register the VMs in Technitium DNS, add (keys not shown default to `enabled: true` and `ttl: 3600`; the
+PTR zone is only created with `create_ptr_zone: true`):
+
+```yaml
 technitium_dns:
-  enabled: true
-  api_port: 53443
-  validate_certs: false
-  zone: "lab.example.com"
-  ttl: 3600
+  zone: lab.example.com
+  api_port: 53443        # default 5380
+  validate_certs: false  # default true
   create_ptr_zone: true
 ```
 
