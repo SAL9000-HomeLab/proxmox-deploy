@@ -26,16 +26,18 @@ the VM isn't in the domain yet, so Kerberos isn't an option until after step 1. 
 
 The listener script ([files/Set-WinRMHttpsListener.ps1](files/Set-WinRMHttpsListener.ps1)) uses the newest
 certificate in `LocalMachine\My` that has its private key, is currently valid, isn't self-signed, has the
-**Server Authentication** EKU (1.3.6.1.5.5.7.3.1) and lists the computer's FQDN among its DNS names. The ADCS
-template therefore needs:
+**Server Authentication** EKU (1.3.6.1.5.5.7.3.1), lists the computer's FQDN among its DNS names, and has a
+subject CN naming the computer. The ADCS template therefore needs:
 
 - **Application Policies / EKU:** Server Authentication. A copy of the built-in _Workstation Authentication_
   template only has Client Authentication: add Server Authentication to it (or base the template on _Computer_
   / _Web Server_). If the template issues a certificate without it, the role fails and lists the EKUs and DNS
   names the certificate has.
-- **Subject Name:** built from Active Directory, with the DNS name in the subject alternative name. Using the
-  DNS name as the subject's common name too is safest: WinRM matches the listener's hostname against the
-  certificate.
+- **Subject Name:** built from Active Directory, with subject name format **Common name** and the DNS name
+  included in the subject alternative name. WinRM matches the listener's hostname against the subject's CN and
+  ignores the subject alternative name: with an empty subject (format "None", the Workstation Authentication
+  default) creating the listener fails with "An internal error occurred". The listener's hostname is set to the
+  CN, which may be the FQDN or the computer name; certificates without one are skipped and a new one enrolled.
 - **Security:** Enroll (and Autoenroll, for renewals) for Domain Computers, or a group the servers are in, and
   issued without CA manager approval (the role fails on a pending request).
 

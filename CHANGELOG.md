@@ -5,6 +5,9 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Fixed: the WinRM HTTPS listener needs a certificate whose subject CN names the computer (WinRM ignores the subject
+  alternative name, and fails with "An internal error occurred" on an empty subject). Certificates without one are
+  skipped and a new one enrolled; the listener's hostname is the certificate's CN (FQDN or computer name).
 - Added: when a Windows clone never writes `SetupComplete.done`, the role inspects the guest (computer name, Windows
   Setup `ImageState`, its `SetupComplete.cmd`, the end of the setup log) and fails saying why, e.g. that the template
   predates vm-templates' clone answer file, instead of only timing out.
