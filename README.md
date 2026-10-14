@@ -75,6 +75,7 @@ Optional per-VM settings, with what happens when they're left out:
 | `dns_servers`, `search_domains` | none (Linux: DHCP/template; Windows needs `dns_servers`) |
 | `cores`, `memory` | 2 cores, 2048 MB |
 | `disk_size` (e.g. `80G`, grow only) | the template's disk size |
+| `data_disks` (extra disks, see [Data disks](#data-disks)) | none |
 | `net_bridge`, `vlan`, `storage` | `proxmox.net_bridge`, none, `proxmox.storage` |
 | `tags`, `description` | none (applied in Proxmox, and in NetBox when it allocates the IP) |
 | `linked_clone` | `false` (full clone) |
@@ -103,6 +104,35 @@ For AWX, inject the credential as `technitium_dns_api_url` and
 Linux VMs need at least one SSH public key, because the templates have no usable password.
 Set `linux_admin_ssh_keys` once (e.g. in AWX) and/or `ssh_authorized_keys` per VM. They're
 installed for `linux_admin_user` (default `ansible`), which gets passwordless sudo.
+
+## Data disks
+
+`data_disks` gives a VM extra virtual disks, e.g. for application data kept apart from the system disk. Each
+disk's `name` is its serial in Proxmox: re-runs find the disk by it (whatever slot it's in) and grow it to `size`,
+and Linux guests find it by it. A disk with a `mount` is formatted (only when it's blank) and mounted on the VM's
+first boot by cloud-init, and the job waits until it's mounted.
+
+```yaml
+provision_vms:
+  - name: r10-app-01
+    template_vmid: 9221                 # tpl-rocky-10
+    data_disks:
+      - name: data                      # serial and filesystem label: 1-12 of a-z, 0-9, -
+        size: 200G                      # whole G or T; grow only
+        mount: /srv/data                # Linux only; omit to attach the disk unformatted
+        # fs: ext4                      # or xfs
+        # storage: local-lvm            # default: the VM's storage
+        # options: backup=0             # extra qm disk options, e.g. leave it out of vzdump backups
+```
+
+New disks go in the lowest free SCSI slots after `scsi0`, with `discard=on`. The guest mounts them by UUID in
+`/etc/fstab` with `nofail`. A disk that already has a filesystem is mounted as it is, and one with partitions is left
+alone, so existing data is never overwritten.
+
+cloud-init only formats and mounts on a VM's first boot. A data disk added to an existing VM is attached and the job
+warns; mount it with `/usr/local/sbin/setup-data-disk <name> <fs> <mount point>` on the VM (from
+[roles/proxmox_clone/files](roles/proxmox_clone/files/setup-data-disk.sh) if the VM predates data disks). Growing a
+disk grows the virtual disk only: grow the filesystem in the guest (`resize2fs` / `xfs_growfs`).
 
 ## Windows VMs
 

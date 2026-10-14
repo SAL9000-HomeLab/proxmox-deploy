@@ -61,6 +61,69 @@
           ansible.builtin.debug:
             msg: "Service port reachable but verification failed for {{ vm_name }} (vmid {{ desired_vmid }})."
 
+# cloud-init formats and mounts data disks at the end of the first boot (after its package update), so this waits
+# longer than the SSH check. It only does that on a VM's first boot: a data disk added to an existing VM is attached
+# but not mounted, so for those it only warns.
+- name: Wait for the data disks to be mounted (Linux)
+  when:
+    - cloud_type == 'linux'
+    - data_disks_mounted | length > 0
+  block:
+    - name: Wait for the QEMU guest agent (Linux)
+      ansible.builtin.command:
+        cmd: qm guest cmd {{ desired_vmid }} ping
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: data_disk_agent
+      until: data_disk_agent.rc == 0
+      retries: "{{ (proxmox_clone_wait.service_timeout | default(600) | int) // 10 }}"
+      delay: 10
+      changed_when: false
+
+    - name: Wait for each data disk's mount point
+      ansible.builtin.command:
+        argv: [qm, guest, exec, "{{ desired_vmid }}", --timeout, "30", --, findmnt, -n, "{{ data_disk.mount }}"]
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: data_disk_mounted
+      until: >-
+        data_disk_mounted.rc == 0
+        and (data_disk_mounted.stdout | from_json).exitcode | default(1) == 0
+      retries: "{{ ((proxmox_clone_wait.service_timeout | default(600) | int) // 10) if not target_exists else 0 }}"
+      delay: 10
+      changed_when: false
+      loop: "{{ data_disks_mounted }}"
+      loop_control:
+        loop_var: data_disk
+        label: "{{ data_disk.name }} on {{ data_disk.mount }}"
+  rescue:
+    - name: Read the end of the cloud-init log
+      ansible.builtin.command:
+        argv:
+          [qm, guest, exec, "{{ desired_vmid }}", --timeout, "30", --, tail, -n, "40", /var/log/cloud-init-output.log]
+      delegate_to: "{{ node_name }}"
+      become: true
+      register: data_disk_cloud_init_log
+      changed_when: false
+      failed_when: false
+
+    - name: Report the data disks that aren't mounted
+      ansible.builtin.fail:
+        msg: >-
+          {{ vm_name }}: data disks aren't mounted ({{ data_disks_mounted | map(attribute='mount') | join(', ') }}).
+          End of /var/log/cloud-init-output.log:
+          {{ ((data_disk_cloud_init_log.stdout | default('{}') | from_json)['out-data'] | default('(unreadable)'))
+             | trim }}
+      when: not target_exists
+
+    - name: Warn that an existing VM's data disks aren't mounted
+      ansible.builtin.debug:
+        msg: >-
+          {{ vm_name }} already existed, and cloud-init only formats and mounts data disks on a VM's first boot.
+          Mount a newly attached disk yourself: /usr/local/sbin/setup-data-disk <name> <fs> <mount point> (copy
+          it from proxmox-deploy's roles/proxmox_clone/files/ if the VM doesn't have it).
+      when: target_exists
+
 # Bump next_vmid if auto-calculated
 - name: Bump next_vmid if we auto-calculated
   ansible.builtin.set_fact:

@@ -1,0 +1,67 @@
+---
+# roles/proxmox_clone/tasks/data_disk.yml
+# Attach one data disk (data_disk) when the VM has no disk with its serial yet, otherwise grow it to its size.
+# Expects facts from data_disks.yml.
+
+- name: Find the data disk on the VM by its serial
+  ansible.builtin.set_fact:
+    data_disk_existing: >-
+      {{ (((qm_config.stdout | default(''))
+           | regex_findall('(?m)^((?:scsi|virtio|sata|ide)[0-9]+): (\S*,serial=' ~ data_disk.name ~ '(?:,\S*)?)$')
+           | map('list') | list) + [['', '']]) | first }}
+    data_disk_gib: >-
+      {{ (data_disk.size | string | upper | regex_replace('[GT]$', '') | int)
+         * (1024 if (data_disk.size | string | upper) is match('.*T$') else 1) }}
+
+- name: Attach the data disk
+  when: data_disk_existing[0] | length == 0
+  block:
+    - name: Pick a free SCSI slot
+      ansible.builtin.set_fact:
+        data_disk_slot: >-
+          {{ range(1, 31) | map('string') | map('regex_replace', '^', 'scsi')
+             | reject('in', data_disk_used_slots) | first }}
+
+    - name: Attach the data disk (qm set)
+      ansible.builtin.command:
+        argv:
+          - qm
+          - set
+          - "{{ desired_vmid }}"
+          - "--{{ data_disk_slot }}"
+          - >-
+            {{ data_disk.storage | default(storage_name) }}:{{ data_disk_gib }},serial={{ data_disk.name
+            }},discard=on{{ (',' ~ data_disk.options) if data_disk.options | default('') | length > 0 else '' }}
+      delegate_to: "{{ node_name }}"
+      become: true
+      changed_when: true
+
+    - name: Mark the slot as used
+      ansible.builtin.set_fact:
+        data_disk_used_slots: "{{ data_disk_used_slots + [data_disk_slot] }}"
+
+# Grow only, like disk_size. A Linux guest sees the new size, but its filesystem has to be grown by hand
+# (resize2fs / xfs_growfs).
+- name: Grow the data disk
+  when: data_disk_existing[0] | length > 0
+  block:
+    - name: Read the data disk's current size
+      ansible.builtin.set_fact:
+        data_disk_current_gib: >-
+          {% set parts = ((data_disk_existing[1] | regex_findall('(?:^|,)size=([0-9.]+)([KMGT]?)') | map('list') | list)
+                          + [['0', 'G']]) | first %}
+          {{ (parts[0] | float) * {'K': 1 / 1048576, 'M': 1 / 1024, 'G': 1, 'T': 1024, '': 1 / 1073741824}[parts[1]] }}
+
+    - name: Grow the data disk (qm disk resize)
+      ansible.builtin.command:
+        argv:
+          - qm
+          - disk
+          - resize
+          - "{{ desired_vmid }}"
+          - "{{ data_disk_existing[0] }}"
+          - "{{ data_disk_gib }}G"
+      delegate_to: "{{ node_name }}"
+      become: true
+      changed_when: true
+      when: (data_disk_gib | float) > (data_disk_current_gib | float)

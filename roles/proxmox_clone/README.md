@@ -24,6 +24,8 @@ Task layout (`tasks/`):
 - `resolve_vars.yml` — resolves per-VM settings and the target vmid
 - `clone.yml` — clones the template (if needed) and gathers `qm config`
 - `configure.yml` — reconciles cores/memory, network/VLAN, tags, description, disk size
+- `data_disks.yml` / `data_disk.yml` — attach each `data_disks` entry (serial = its name) in a free SCSI slot, or
+  grow it
 - `cloudinit.yml` — renders/uploads the Linux userdata snippet, allocates a NetBox IP if needed,
   reconciles cicustom/ipconfig/DNS (Windows VMs get ipconfig/DNS only, so re-runs reuse their IP)
 - `technitium_dns.yml` — creates the VM's Technitium A and associated PTR records when enabled
@@ -58,6 +60,10 @@ Variable reference:
     (with a warning). On a Linux VM's first boot, cloud-init runs `files/grow-root-fs.sh` to grow the
     root partition, LVM volume and filesystem into the new space. It doesn't run again, so after
     enlarging an existing VM's disk, grow it with ans-cleanup's `playbook_grow_root_fs.yml`.
+  - `data_disks`: extra disks, each `name` (required, 1-12 of `a-z0-9-`: the disk's Proxmox serial and filesystem
+    label), `size` (required, whole `G` or `T`, grow only), and optional `storage` (default: the VM's), `options`
+    (appended to the `qm set` disk string, e.g. `backup=0`), `mount` (Linux: format if blank and mount on first
+    boot; the job waits for it) and `fs` (`ext4` default, or `xfs`). See the repository README's "Data disks".
   - `tags` (YAML list, or a comma-separated string such as `"windows,2025,core"`). Set as the VM's
     tags in Proxmox (`qm set --tags`; Proxmox creates new tags on the fly), and — only when NetBox
     allocates the IP (i.e. `ip` isn't supplied) — as the `tags` on that NetBox IP address
@@ -132,6 +138,9 @@ Templates:
   is the PowerShell `windows_guest.yml` runs in Windows guests: it's written to a root-only file in `/run` on
   the node and reaches the guest on stdin (`qm guest exec --pass-stdin`), so the password is never on a
   command line, and it's deleted straight after.
+- `files/setup-data-disk.sh` is embedded in the Linux user-data as `/usr/local/sbin/setup-data-disk` when a VM has
+  a data disk with a `mount`, and run by `runcmd` once per such disk: it finds the disk by its serial (`lsblk`
+  `SERIAL`), formats it only when it has no filesystem and no partitions, and mounts it by UUID.
 - `files/grow-root-fs.sh` is embedded in the Linux user-data as `/usr/local/sbin/grow-root-fs` and run
   by `runcmd`. The same script is in ans-cleanup (`roles/grow_root_fs/files/`); keep the two identical.
 

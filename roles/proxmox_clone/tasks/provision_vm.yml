@@ -12,6 +12,9 @@
 - name: Reconcile CPU/memory, network, tags, and disk size
   ansible.builtin.import_tasks: configure.yml
 
+- name: Attach and grow data disks
+  ansible.builtin.import_tasks: data_disks.yml
+
 - name: Reconcile cloud-init (Linux), NetBox IP and ipconfig
   ansible.builtin.import_tasks: cloudinit.yml
 

@@ -54,7 +54,14 @@
         "growfs",
         "growpart",
         "lvextend",
-        "pvresize"
+        "pvresize",
+        "HARDDISK",
+        "blkid",
+        "dnpo",
+        "mountpoint",
+        "nofail",
+        "udevadm",
+        "vzdump"
     ],
     "flagWords": [
         "hte"
