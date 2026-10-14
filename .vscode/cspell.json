@@ -62,7 +62,9 @@
         "nofail",
         "udevadm",
         "vzdump",
-        "nics"
+        "nics",
+        "pvesh",
+        "equalto"
     ],
     "flagWords": [
         "hte"

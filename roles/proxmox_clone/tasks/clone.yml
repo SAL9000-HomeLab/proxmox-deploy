@@ -1,7 +1,8 @@
 ---
 # roles/proxmox_clone/tasks/clone.yml
 # Clone the template into the target vmid (if it doesn't already exist) and
-# gather its resulting qm config for the configure/cloudinit steps.
+# gather its resulting qm config for the configure/cloudinit steps. The clone runs
+# on the template's node; --target puts the VM on node_name when that's another node.
 # Expects vm_item loop variable and facts from resolve_vars.yml.
 
 - name: Clone template into new VMID (when not exists) using qm (full vs linked)
@@ -14,7 +15,8 @@
           --name {{ vm_name }}
           --full
           --storage {{ storage_name }}
-      delegate_to: "{{ node_name }}"
+          {{ ('--target ' ~ target_pve_node) if template_node_name != node_name else '' }}
+      delegate_to: "{{ template_node_name }}"
       become: true
       register: qm_clone_full
       changed_when: >-
@@ -32,7 +34,8 @@
         cmd: >-
           qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
           --name {{ vm_name }}
-      delegate_to: "{{ node_name }}"
+          {{ ('--target ' ~ target_pve_node) if template_node_name != node_name else '' }}
+      delegate_to: "{{ template_node_name }}"
       become: true
       register: qm_clone_linked
       changed_when: >-

@@ -135,6 +135,14 @@ warns; mount it with `/usr/local/sbin/setup-data-disk <name> <fs> <mount point>`
 [roles/proxmox_clone/files](roles/proxmox_clone/files/setup-data-disk.sh) if the VM predates data disks). Growing a
 disk grows the virtual disk only: grow the filesystem in the guest (`resize2fs` / `xfs_growfs`).
 
+## Templates on another node
+
+A template belongs to one Proxmox node, but a VM can go on any node. The role finds the template's node in the cluster
+(`pvesh get /cluster/resources`), runs `qm clone` there and passes `--target <node>` when the VM's `node` is a
+different one. Proxmox only allows that when the template's disks are on shared storage (Ceph, NFS, …), and the
+template's node must be in the inventory's `proxmox` group (as `pve01` or `pve01.<domain>`), since the clone runs
+there.
+
 ## Extra network interfaces
 
 `extra_nics` gives a Linux VM more network interfaces (`net1`, `net2`, … in list order), e.g. a leg on a storage
@@ -169,28 +177,52 @@ etcd members (the cluster keeps quorum) and a third of the workers. Each node ha
 provision_vms:
   - name: r10-rke2-s01
     node: pve01.lab.example.com
-    <<: &rke2_server                    # the settings every server shares
-      template_vmid: 9223               # tpl-rocky-10-rke2
-      cores: 4
-      memory: 8192
-      disk_size: 60G
-      tags: [rke2, rke2-server]
-      extra_nics: &rke2_storage_nics
-        - {bridge: vnet173, mtu: 1}     # Ceph public network
-        - {bridge: vnet171, mtu: 1}     # NAS iSCSI/NFS network
-  - {name: r10-rke2-s02, node: pve02.lab.example.com, <<: *rke2_server}
-  - {name: r10-rke2-s03, node: pve03.lab.example.com, <<: *rke2_server}
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+    tags: [rke2, rke2-server]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-s02
+    node: pve02.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+    tags: [rke2, rke2-server]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-s03
+    node: pve03.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+    tags: [rke2, rke2-server]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
   - name: r10-rke2-a01
     node: pve01.lab.example.com
-    <<: &rke2_agent
-      template_vmid: 9223
-      cores: 8
-      memory: 16384
-      disk_size: 80G
-      tags: [rke2, rke2-agent]
-      extra_nics: *rke2_storage_nics
-  - {name: r10-rke2-a02, node: pve02.lab.example.com, <<: *rke2_agent}
-  - {name: r10-rke2-a03, node: pve03.lab.example.com, <<: *rke2_agent}
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 8
+    memory: 16384
+    disk_size: 80G
+    tags: [rke2, rke2-agent]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-a02
+    node: pve02.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 8
+    memory: 16384
+    disk_size: 80G
+    tags: [rke2, rke2-agent]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-a03
+    node: pve03.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 8
+    memory: 16384
+    disk_size: 80G
+    tags: [rke2, rke2-agent]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
 
 netbox_ip_ranges_by_bridge:             # replaces the whole map: keep the existing bridges
   vnet30: 19
@@ -198,7 +230,11 @@ netbox_ip_ranges_by_bridge:             # replaces the whole map: keep the exist
   vnet173: 23
 ```
 
-Every `node` must be in the inventory's `proxmox` group. Kubernetes doesn't know which VMs share a host, so the
+Don't use YAML anchors and merge keys (`<<: *name`) in AWX/Ascender extra vars: the web UI converts extra vars to
+JSON without expanding them, so the VMs lose those settings (`'dict object' has no attribute 'template_vmid'`).
+
+Every `node` must be in the inventory's `proxmox` group. The template only has to exist on one node: see
+[Templates on another node](#templates-on-another-node). Kubernetes doesn't know which VMs share a host, so the
 cluster setup labels each node with its host (`topology.kubernetes.io/zone`) to spread replicas across hosts.
 
 ## Windows VMs
