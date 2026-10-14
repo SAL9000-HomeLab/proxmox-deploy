@@ -76,6 +76,7 @@ Optional per-VM settings, with what happens when they're left out:
 | `cores`, `memory` | 2 cores, 2048 MB |
 | `disk_size` (e.g. `80G`, grow only) | the template's disk size |
 | `data_disks` (extra disks, see [Data disks](#data-disks)) | none |
+| `extra_nics` (Linux, see [Extra network interfaces](#extra-network-interfaces)) | none |
 | `net_bridge`, `vlan`, `storage` | `proxmox.net_bridge`, none, `proxmox.storage` |
 | `tags`, `description` | none (applied in Proxmox, and in NetBox when it allocates the IP) |
 | `linked_clone` | `false` (full clone) |
@@ -133,6 +134,72 @@ cloud-init only formats and mounts on a VM's first boot. A data disk added to an
 warns; mount it with `/usr/local/sbin/setup-data-disk <name> <fs> <mount point>` on the VM (from
 [roles/proxmox_clone/files](roles/proxmox_clone/files/setup-data-disk.sh) if the VM predates data disks). Growing a
 disk grows the virtual disk only: grow the filesystem in the guest (`resize2fs` / `xfs_growfs`).
+
+## Extra network interfaces
+
+`extra_nics` gives a Linux VM more network interfaces (`net1`, `net2`, … in list order), e.g. a leg on a storage
+network. Each gets a static address with no gateway, so the default route stays on `net0`; cloud-init applies them
+from Proxmox's `ipconfig1`, `ipconfig2`, … like `net0`.
+
+```yaml
+extra_nics:
+  - bridge: vnet173              # required
+    # ip: 10.0.173.21/24         # CIDR, or dhcp; default: the next free address in the bridge's NetBox range
+    # vlan: 173                  # VLAN tag on a VLAN-aware bridge
+    # mtu: 1                     # 1 = the bridge's MTU (use it for jumbo-frame networks); or a number
+    # model: virtio
+```
+
+An interface without `ip` gets its address from NetBox: add a range for its bridge to `netbox_ip_ranges_by_bridge`
+(the job fails before changing anything when there is none). The reservation's description is
+`<NAME> net<N> (<bridge>)`, and it has no DNS name. Re-runs keep the address the VM already has and reserve it in
+NetBox again if the record is gone, as for `net0`. Changing an interface's bridge, VLAN or MTU keeps its MAC address.
+proxmox-deprovision releases these addresses along with the VM's main one (from its version that matches every
+`ipconfigN`).
+
+Only Linux VMs take extra interfaces: Windows guests only configure `net0`.
+
+### RKE2 nodes
+
+Six nodes on three Proxmox hosts: one server and one agent on each host, so losing a host takes out one of the three
+etcd members (the cluster keeps quorum) and a third of the workers. Each node has legs on the Ceph public network
+(for ceph-csi) and the NAS storage network (Synology iSCSI and NFS).
+
+```yaml
+provision_vms:
+  - name: r10-rke2-s01
+    node: pve01.lab.example.com
+    <<: &rke2_server                    # the settings every server shares
+      template_vmid: 9223               # tpl-rocky-10-rke2
+      cores: 4
+      memory: 8192
+      disk_size: 60G
+      tags: [rke2, rke2-server]
+      extra_nics: &rke2_storage_nics
+        - {bridge: vnet173, mtu: 1}     # Ceph public network
+        - {bridge: vnet171, mtu: 1}     # NAS iSCSI/NFS network
+  - {name: r10-rke2-s02, node: pve02.lab.example.com, <<: *rke2_server}
+  - {name: r10-rke2-s03, node: pve03.lab.example.com, <<: *rke2_server}
+  - name: r10-rke2-a01
+    node: pve01.lab.example.com
+    <<: &rke2_agent
+      template_vmid: 9223
+      cores: 8
+      memory: 16384
+      disk_size: 80G
+      tags: [rke2, rke2-agent]
+      extra_nics: *rke2_storage_nics
+  - {name: r10-rke2-a02, node: pve02.lab.example.com, <<: *rke2_agent}
+  - {name: r10-rke2-a03, node: pve03.lab.example.com, <<: *rke2_agent}
+
+netbox_ip_ranges_by_bridge:             # replaces the whole map: keep the existing bridges
+  vnet30: 19
+  vnet171: 22                           # your NetBox range IDs for the storage networks
+  vnet173: 23
+```
+
+Every `node` must be in the inventory's `proxmox` group. Kubernetes doesn't know which VMs share a host, so the
+cluster setup labels each node with its host (`topology.kubernetes.io/zone`) to spread replicas across hosts.
 
 ## Windows VMs
 
