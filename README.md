@@ -75,6 +75,7 @@ Optional per-VM settings, with what happens when they're left out:
 | `dns_servers`, `search_domains` | none (Linux: DHCP/template; Windows needs `dns_servers`) |
 | `cores`, `memory` | 2 cores, 2048 MB |
 | `disk_size` (e.g. `80G`, grow only) | the template's disk size |
+| `data_disks` (extra disks, see [Data disks](#data-disks)) | none |
 | `net_bridge`, `vlan`, `storage` | `proxmox.net_bridge`, none, `proxmox.storage` |
 | `tags`, `description` | none (applied in Proxmox, and in NetBox when it allocates the IP) |
 | `linked_clone` | `false` (full clone) |
@@ -103,6 +104,78 @@ For AWX, inject the credential as `technitium_dns_api_url` and
 Linux VMs need at least one SSH public key, because the templates have no usable password.
 Set `linux_admin_ssh_keys` once (e.g. in AWX) and/or `ssh_authorized_keys` per VM. They're
 installed for `linux_admin_user` (default `ansible`), which gets passwordless sudo.
+
+## Data disks
+
+`data_disks` gives a VM extra virtual disks, e.g. a Longhorn disk on Kubernetes nodes. Each disk's `name` is its
+serial in Proxmox: re-runs find the disk by it (whatever slot it's in) and grow it to `size`, and Linux guests find
+it by it. A disk with a `mount` is formatted (only when it's blank) and mounted on the VM's first boot by cloud-init,
+and the job waits until it's mounted.
+
+```yaml
+provision_vms:
+  - name: r10-rke2-s01
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    node: pve01.lab.example.com
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+    data_disks:
+      - name: longhorn                  # serial and filesystem label: 1-12 of a-z, 0-9, -
+        size: 200G                      # whole G or T; grow only
+        mount: /var/lib/longhorn        # Linux only; omit to attach the disk unformatted
+        # fs: ext4                      # or xfs
+        # storage: local-lvm            # default: the VM's storage
+        # options: backup=0             # extra qm disk options, e.g. leave it out of vzdump backups
+```
+
+New disks go in the lowest free SCSI slots after `scsi0`, with `discard=on`. The guest mounts them by UUID in
+`/etc/fstab` with `nofail`. A disk that already has a filesystem is mounted as it is, and one with partitions is left
+alone, so existing data is never overwritten.
+
+cloud-init only formats and mounts on a VM's first boot. A data disk added to an existing VM is attached and the job
+warns; mount it with `/usr/local/sbin/setup-data-disk <name> <fs> <mount point>` on the VM (from
+[roles/proxmox_clone/files](roles/proxmox_clone/files/setup-data-disk.sh) if the VM predates data disks). Growing a
+disk grows the virtual disk only: grow the filesystem in the guest (`resize2fs` / `xfs_growfs`).
+
+### RKE2 nodes
+
+Three Proxmox hosts and six nodes: one server and one agent on each host, so losing a host takes out one of the three
+etcd members (the cluster keeps quorum) and a third of the workers. Kubernetes doesn't know which VMs share a host, so
+label the nodes with their host (`topology.kubernetes.io/zone`) when the cluster is set up; Longhorn then puts the
+replicas of a volume on different hosts.
+
+```yaml
+provision_vms:
+  - name: r10-rke2-s01
+    node: pve01.lab.example.com
+    <<: &rke2_server                    # the settings every server shares
+      template_vmid: 9223               # tpl-rocky-10-rke2
+      cores: 4
+      memory: 8192
+      disk_size: 60G
+      tags: [rke2, rke2-server]
+      data_disks:
+        - {name: longhorn, size: 200G, mount: /var/lib/longhorn}
+  - {name: r10-rke2-s02, node: pve02.lab.example.com, <<: *rke2_server}
+  - {name: r10-rke2-s03, node: pve03.lab.example.com, <<: *rke2_server}
+  - name: r10-rke2-a01
+    node: pve01.lab.example.com
+    <<: &rke2_agent
+      template_vmid: 9223
+      cores: 8
+      memory: 16384
+      disk_size: 80G
+      tags: [rke2, rke2-agent]
+      data_disks:
+        - {name: longhorn, size: 500G, mount: /var/lib/longhorn}
+  - {name: r10-rke2-a02, node: pve02.lab.example.com, <<: *rke2_agent}
+  - {name: r10-rke2-a03, node: pve03.lab.example.com, <<: *rke2_agent}
+```
+
+Every node in the list must be in the inventory's `proxmox` group. Put the Longhorn disks on storage local to each
+host where you can: Longhorn already replicates across nodes, so shared storage underneath adds a second network
+hop and puts every replica on the same storage server.
 
 ## Windows VMs
 

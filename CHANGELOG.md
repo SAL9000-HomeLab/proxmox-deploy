@@ -5,6 +5,10 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: `data_disks` per VM attaches extra disks (e.g. Longhorn on Kubernetes nodes), identified by their name as
+  the Proxmox disk serial, so re-runs find and grow them whatever slot they're in. On Linux VMs a disk with a `mount`
+  is formatted only when blank and mounted by UUID on first boot (`files/setup-data-disk.sh`, from cloud-init), and
+  the job waits for the mount over the guest agent, failing with the end of the cloud-init log if it doesn't appear.
 - Changed: the README's extra vars example is the minimum a deploy needs (one Linux and one Windows VM), with the
   optional per-VM settings and their defaults in a table; `template`, `disk_target` and a per-VM `net_bridge` are
   dropped (unused or defaulted), and the Technitium keys that have no suitable default are listed.
