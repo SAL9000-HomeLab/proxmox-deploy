@@ -5,6 +5,10 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: `extra_nics` per Linux VM adds `net1`, `net2`, … (bridge, VLAN, MTU) with a static address each and no
+  gateway, from `ip` or the bridge's NetBox range, e.g. legs on storage networks. Re-runs keep the address and
+  re-reserve it in NetBox if needed; bridge/VLAN/MTU changes keep the MAC. README example: six RKE2 nodes on three
+  hosts with Ceph and NAS storage interfaces.
 - Added: `data_disks` per VM attaches extra disks, identified by their name as
   the Proxmox disk serial, so re-runs find and grow them whatever slot they're in. On Linux VMs a disk with a `mount`
   is formatted only when blank and mounted by UUID on first boot (`files/setup-data-disk.sh`, from cloud-init), and

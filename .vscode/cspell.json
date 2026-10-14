@@ -61,7 +61,8 @@
         "mountpoint",
         "nofail",
         "udevadm",
-        "vzdump"
+        "vzdump",
+        "nics"
     ],
     "flagWords": [
         "hte"
