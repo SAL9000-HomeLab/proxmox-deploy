@@ -18,6 +18,9 @@
 - name: Reconcile cloud-init (Linux), NetBox IP and ipconfig
   ansible.builtin.import_tasks: cloudinit.yml
 
+- name: Add extra network interfaces (Linux)
+  ansible.builtin.import_tasks: extra_nics.yml
+
 - name: Manage VM DNS records
   ansible.builtin.import_tasks: technitium_dns.yml
 

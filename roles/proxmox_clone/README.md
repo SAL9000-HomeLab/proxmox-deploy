@@ -28,6 +28,8 @@ Task layout (`tasks/`):
   grow it
 - `cloudinit.yml` — renders/uploads the Linux userdata snippet, allocates a NetBox IP if needed,
   reconciles cicustom/ipconfig/DNS (Windows VMs get ipconfig/DNS only, so re-runs reuse their IP)
+- `extra_nics.yml` / `extra_nic.yml` — Linux only: add `extra_nics` as `net1`, `net2`, … with a static address each
+  (`ipconfig1`, …; from NetBox when `ip` isn't set), no gateway
 - `technitium_dns.yml` — creates the VM's Technitium A and associated PTR records when enabled
 - `boot.yml` — starts the VM, runs `windows_guest.yml` for Windows, and waits for SSH (22) or WinRM (5985)
 - `windows_guest.yml` — Windows only: waits for the guest agent and for the template's first-boot setup
@@ -64,6 +66,10 @@ Variable reference:
     label), `size` (required, whole `G` or `T`, grow only), and optional `storage` (default: the VM's), `options`
     (appended to the `qm set` disk string, e.g. `backup=0`), `mount` (Linux: format if blank and mount on first
     boot; the job waits for it) and `fs` (`ext4` default, or `xfs`). See the repository README's "Data disks".
+  - `extra_nics` (Linux only): extra interfaces `net1`, `net2`, … in list order, each `bridge` (required), `ip`
+    (CIDR or `dhcp`; default: reuse the VM's `ipconfigN`, else allocate from `netbox_ip_ranges_by_bridge[bridge]`),
+    `vlan`, `mtu` (`1` = the bridge's MTU) and `model` (default `virtio`). No gateway. See the repository README's
+    "Extra network interfaces".
   - `tags` (YAML list, or a comma-separated string such as `"windows,2025,core"`). Set as the VM's
     tags in Proxmox (`qm set --tags`; Proxmox creates new tags on the fly), and — only when NetBox
     allocates the IP (i.e. `ip` isn't supplied) — as the `tags` on that NetBox IP address

@@ -5,6 +5,15 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Fixed: VMs can be deployed to a different node than the one holding their template. The role finds the template
+  in the cluster-wide resource list and clones it on its node with `qm clone --target <node>` (needs the template on
+  shared storage); it used to look for the template on the VM's node only and fail. The template's node must be in
+  the `proxmox` inventory group.
+- Fixed: the README's RKE2 node example no longer uses YAML merge keys, which AWX/Ascender's extra vars don't expand.
+- Added: `extra_nics` per Linux VM adds `net1`, `net2`, … (bridge, VLAN, MTU) with a static address each and no
+  gateway, from `ip` or the bridge's NetBox range, e.g. legs on storage networks. Re-runs keep the address and
+  re-reserve it in NetBox if needed; bridge/VLAN/MTU changes keep the MAC. README example: six RKE2 nodes on three
+  hosts with Ceph and NAS storage interfaces.
 - Added: `data_disks` per VM attaches extra disks, identified by their name as
   the Proxmox disk serial, so re-runs find and grow them whatever slot they're in. On Linux VMs a disk with a `mount`
   is formatted only when blank and mounted by UUID on first boot (`files/setup-data-disk.sh`, from cloud-init), and

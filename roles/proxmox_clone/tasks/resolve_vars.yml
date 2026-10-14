@@ -58,21 +58,57 @@
          | length > 0 }}
   run_once: false
 
-- name: Determine if template vmid exists on node
-  ansible.builtin.set_fact:
-    template_exists: >-
-      {{ (qm_list_full.stdout_lines | select('match', '^\s*' + (vm_item.template_vmid | string) + '\s') | list)
-         | length > 0 }}
-  run_once: false
-
-- name: Fail if template not present on node
-  ansible.builtin.fail:
-    msg: >-
-      Template vmid {{ vm_item.template_vmid }} not found on node {{ node_name }}.
-      qm list: {{ qm_list_full.stdout_lines | join('\n') }}
-  when: not template_exists
+# A template belongs to one node, but qm only sees the VMs on its own node. Find the template in the cluster-wide
+# list instead: clone.yml clones it on its node and places the VM on node_name with qm clone --target (Proxmox
+# allows that when the template's disks are on shared storage, e.g. Ceph or NFS).
+- name: List the cluster's VMs and templates
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/resources --type vm --output-format json
   delegate_to: "{{ node_name }}"
   become: true
+  register: cluster_vms
+  changed_when: false
+
+- name: Read the target node's Proxmox name
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/status --output-format json
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: cluster_status
+  changed_when: false
+
+- name: Find the template's node
+  ansible.builtin.set_fact:
+    template_resource: >-
+      {{ (cluster_vms.stdout | from_json | selectattr('vmid', 'equalto', vm_item.template_vmid | int) | list
+          + [{}]) | first }}
+    target_pve_node: >-
+      {{ ((cluster_status.stdout | from_json | selectattr('type', 'equalto', 'node')
+           | selectattr('local', 'defined') | selectattr('local', 'equalto', 1) | map(attribute='name') | list)
+          + [node_name | regex_replace('[.].*$', '')]) | first }}
+
+- name: Fail if the template doesn't exist
+  ansible.builtin.fail:
+    msg: >-
+      Template vmid {{ vm_item.template_vmid }} isn't in the Proxmox cluster
+      ({{ node_name }} lists no VM or template with that ID).
+  when: template_resource.node is not defined
+
+# qm commands for the template run on its node: the inventory host named after it (pve01 or pve01.<domain>).
+- name: Find the inventory host for the template's node
+  ansible.builtin.set_fact:
+    template_node_name: >-
+      {{ node_name if template_resource.node == target_pve_node
+         else ((groups['proxmox'] | default([]) | select('match', '^' ~ template_resource.node ~ '([.]|$)') | list)
+               + ['']) | first }}
+
+- name: Fail if the template's node isn't in the inventory
+  ansible.builtin.fail:
+    msg: >-
+      Template {{ vm_item.template_vmid }} is on Proxmox node {{ template_resource.node }}, which has no host in the
+      inventory's proxmox group (named {{ template_resource.node }} or {{ template_resource.node }}.<domain>). Add it:
+      the clone runs there.
+  when: template_node_name | length == 0
 
 # The OS comes from the template's Proxmox OS type (ostype): every Windows type starts with "w" (win11 for
 # Windows Server 2025, win10, w2k8, ...), anything else (l26, or "other" when unset) is treated as Linux.
@@ -80,7 +116,7 @@
 - name: Read the template's OS type
   ansible.builtin.command:
     cmd: qm config {{ vm_item.template_vmid }}
-  delegate_to: "{{ node_name }}"
+  delegate_to: "{{ template_node_name }}"
   become: true
   register: template_qm_config
   changed_when: false
