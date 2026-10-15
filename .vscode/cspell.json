@@ -64,7 +64,9 @@
         "vzdump",
         "nics",
         "pvesh",
-        "equalto"
+        "equalto",
+        "netaddr",
+        "startswith"
     ],
     "flagWords": [
         "hte"

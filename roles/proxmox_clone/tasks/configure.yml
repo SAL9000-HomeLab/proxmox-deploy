@@ -67,18 +67,6 @@
 
 # --- Ensure network and VLAN match desired settings (idempotent) ----------
 
-- name: Resolve VM bridge
-  ansible.builtin.set_fact:
-    net_bridge_resolved: >-
-      {{
-        vm_item.net_bridge
-        | default(
-            proxmox_cb.get('net_bridge')
-            | default(proxmox_defaults_cb.get('net_bridge'))
-          )
-      }}
-    net_model_resolved: "{{ vm_item.net_model | default('virtio') }}"
-
 - name: Build net0 configuration string
   ansible.builtin.set_fact:
     net0_config: >-

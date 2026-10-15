@@ -22,6 +22,9 @@ Task layout (`tasks/`):
 - `main.yml` — merges `proxmox_defaults`, validates `provision_vms`, loops per VM
 - `provision_vm.yml` — thin orchestrator, imports the files below in order
 - `resolve_vars.yml` — resolves per-VM settings and the target vmid
+- `network_checks.yml` — resolves the bridge and NetBox settings and, before cloning, checks net0's gateway is in
+  the VM's subnet (of `ip`, or of the bridge's NetBox range) and that a NetBox-allocated VM's bridge has a range and
+  a gateway
 - `clone.yml` — clones the template (if needed) and gathers `qm config`
 - `configure.yml` — reconciles cores/memory, network/VLAN, tags, description, disk size
 - `data_disks.yml` / `data_disk.yml` — attach each `data_disks` entry (serial = its name) in a free SCSI slot, or
