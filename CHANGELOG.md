@@ -5,6 +5,12 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Removed: the example `provision_vms` list in `group_vars/proxmox.yml`. It was live, so a job without
+  `provision_vms` in its extra vars would have deployed its two example VMs; such a job now fails with "No
+  provision_vms defined".
+- Fixed: a job without `proxmox` in its extra vars failed with "recursive loop detected in template string":
+  `site.yml` passed `proxmox: "{{ proxmox | default({}) }}"` (and `provision_vms` likewise) as role parameters,
+  which refer to themselves. The role reads both variables directly.
 - Added: before cloning, the job checks net0's gateway is in the VM's subnet (of `ip`, or of the bridge's NetBox
   range) and that a VM whose address comes from NetBox has a range and a gateway for its bridge. A placeholder
   gateway (`10.0.30.1` on a `10.100.30.0/24` range) used to deploy VMs nothing outside their subnet could reach.

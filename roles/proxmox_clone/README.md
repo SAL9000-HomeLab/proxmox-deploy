@@ -41,7 +41,7 @@ Task layout (`tasks/`):
 
 Usage:
 
-- Pass `provision_vms` via AWX extra vars, inventory group vars, host_vars, or `group_vars/proxmox.yml`.
+- Pass `provision_vms` as AWX/Ascender job extra vars (or `-e` for a local run). The repository sets no default list.
 - Ensure inventory contains the Proxmox node and `ansible_python_interpreter` set.
 - Run the role from a play that targets `proxmox` hosts.
 
@@ -188,9 +188,7 @@ Playbook usage:
 ```yaml
 - hosts: proxmox
   roles:
-    - role: proxmox_clone
-      proxmox: "{{ proxmox | default({}) }}"
-      provision_vms: "{{ provision_vms }}"
+    - role: proxmox_clone   # reads provision_vms and proxmox from the job's variables
 ```
 
 NetBox mapping example:
