@@ -62,19 +62,6 @@
   delegate_to: localhost
   when: userdata_render.dest is defined
 
-- name: Resolve NetBox credential variables for this host
-  ansible.builtin.set_fact:
-    netbox_resolved_api_url: "{{ (netbox | default({})).api_url | default(netbox_api_url | default('')) }}"
-    netbox_resolved_token: "{{ (netbox | default({})).token | default(netbox_token | default('')) }}"
-  run_once: false
-
-# v2 tokens (NetBox 4.5+) look like nbt_<key>.<token> and use Bearer; v1 tokens (deprecated in 4.6) use Token.
-- name: Build the NetBox authorization header
-  ansible.builtin.set_fact:
-    netbox_resolved_authorization: >-
-      {{ ('Bearer ' if netbox_resolved_token.startswith('nbt_') else 'Token ') ~ netbox_resolved_token }}
-  no_log: true
-
 - name: Safety-check NetBox configuration
   ansible.builtin.assert:
     that:
@@ -140,7 +127,7 @@
 
 - name: Resolve NetBox IP range
   ansible.builtin.set_fact:
-    netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] }}"
+    netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] | default('') }}"
 
 - name: Allocate IP from NetBox when ip is not defined and allocation is enabled
   when:

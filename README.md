@@ -48,11 +48,12 @@ proxmox:
   storage: vm-pool
   net_bridge: vnet30
 
-# NetBox range and gateway per bridge (the repository's group_vars only hold placeholders)
+# NetBox range and net0 gateway per bridge. Required for VMs that get their address from NetBox; the repository
+# has no values for them. Use your own range IDs and gateways: the job checks the gateway is in the range's subnet.
 netbox_ip_ranges_by_bridge:
-  vnet30: 19
+  vnet30: 19                        # your NetBox IP range ID
 netbox_gateway_by_bridge:
-  vnet30: 10.0.30.1
+  vnet30: 10.0.30.1                 # your vnet30 gateway
 
 # Linux VMs: the only way to log in (see below)
 linux_admin_ssh_keys:
@@ -224,10 +225,12 @@ provision_vms:
     tags: [rke2, rke2-agent]
     extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
 
-netbox_ip_ranges_by_bridge:             # replaces the whole map: keep the existing bridges
+netbox_ip_ranges_by_bridge:             # your NetBox range IDs
   vnet30: 19
-  vnet171: 22                           # your NetBox range IDs for the storage networks
+  vnet171: 22                           # the storage networks: no gateway needed
   vnet173: 23
+netbox_gateway_by_bridge:               # your vnet30 gateway (net0 only)
+  vnet30: 10.0.30.1
 ```
 
 Don't use YAML anchors and merge keys (`<<: *name`) in AWX/Ascender extra vars: the web UI converts extra vars to
@@ -261,8 +264,9 @@ Afterwards the VM can be managed over PSRP with Kerberos on 5986 (as ans-defos d
 | `domain_admin_groups` | Job extra vars | Domain groups added to local Administrators (per VM: `admin_groups`). |
 | `windows_cert_template` | Job extra vars | ADCS template to enroll in (per VM: `cert_template`). See [the certificate requirements](roles/windows_domain_member/README.md#the-certificate): Server Authentication, and subject name format **Common name**. |
 
-Set the domain variables (and the NetBox maps, `netbox_ip_ranges_by_bridge` / `netbox_gateway_by_bridge`) as
-**job template extra vars**, not as inventory variables. The placeholder values in this repository's
+Set the domain variables and the NetBox maps (`netbox_ip_ranges_by_bridge` / `netbox_gateway_by_bridge`, which the
+repository leaves unset) as **job template extra vars**, not as inventory variables. The placeholder values in this
+repository's
 `group_vars/` sit next to `site.yml`, and Ansible ranks playbook `group_vars` above an AWX/Ascender
 inventory's own variables, so inventory values are silently ignored. Only extra vars outrank them. A
 `technitium_dns` or `proxmox` dictionary in extra vars replaces the repository's whole dictionary (no merge).
@@ -313,6 +317,19 @@ template takes only one Machine credential, so `windows_admin_password` comes fr
 The password is set once, on a VM's first deploy (it replaces the template's build password), and the domain
 play then logs in with it. Changing the credential later doesn't change existing VMs; it only applies to VMs
 deployed afterwards, so re-runs against older VMs need the password they were deployed with.
+
+## Troubleshooting network settings
+
+Before cloning, the job checks net0's gateway (`gateway` on the VM, else `netbox_gateway_by_bridge[<bridge>]`) is
+in the VM's subnet: that of `ip`, or of the bridge's NetBox range when NetBox allocates the address. A gateway
+outside it leaves the VM unreachable from every other network, though it gets its address and NICs as normal.
+
+- **"gateway … isn't in …"**: fix the gateway it names. The extra vars replace the whole map, so check every bridge
+  in it.
+- **"… need an entry for `<bridge>`"**: add the bridge's NetBox range ID and gateway to the extra vars.
+- **An existing VM with the wrong gateway**: fix the extra vars and re-run the job (it updates `ipconfig0`), then
+  reboot the VM. cloud-init applies the network settings at boot; the change gives it a new instance ID, so it also
+  regenerates the SSH host keys.
 
 ## Troubleshooting Windows deployments
 

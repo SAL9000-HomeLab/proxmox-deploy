@@ -6,6 +6,9 @@
 - name: Resolve variables and target vmid
   ansible.builtin.import_tasks: resolve_vars.yml
 
+- name: Check the VM's network settings before cloning
+  ansible.builtin.import_tasks: network_checks.yml
+
 - name: Clone template and gather qm config
   ansible.builtin.import_tasks: clone.yml
 

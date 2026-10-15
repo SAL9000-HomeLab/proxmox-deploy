@@ -20,22 +20,10 @@ proxmox:
   timeout: 300
 
 netbox_allocate_ip: true
-netbox_ip_ranges_by_bridge:
-  vnet20: 3
-  vnet30: 19
-  vnet40: 20
-  vnet150: 21
-  vnet171: 22
-  vnet172: 23
-  vnet173: 24
-netbox_gateway_by_bridge:
-  vnet20: 10.0.20.1
-  vnet30: 10.0.30.1
-  vnet40: 10.0.40.1
-  vnet150: 10.0.150.1
-  vnet171: 10.0.171.1
-  vnet172: 10.0.172.1
-  vnet173: 10.0.173.1
+# netbox_ip_ranges_by_bridge (bridge -> NetBox IP range ID) and netbox_gateway_by_bridge (bridge -> net0 gateway)
+# are deliberately not set here: placeholder values in this file outrank AWX/Ascender inventory variables and
+# would be used silently. Set both as job extra vars; a VM whose address comes from NetBox fails before cloning
+# when its bridge has no range or gateway, or when the gateway isn't in the range's subnet.
 
 technitium_dns:
   enabled: false

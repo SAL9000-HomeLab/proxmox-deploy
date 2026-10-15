@@ -5,6 +5,12 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: before cloning, the job checks net0's gateway is in the VM's subnet (of `ip`, or of the bridge's NetBox
+  range) and that a VM whose address comes from NetBox has a range and a gateway for its bridge. A placeholder
+  gateway (`10.0.30.1` on a `10.100.30.0/24` range) used to deploy VMs nothing outside their subnet could reach.
+- Removed: the placeholder `netbox_ip_ranges_by_bridge` and `netbox_gateway_by_bridge` in `group_vars/proxmox.yml`.
+  They outranked inventory variables and were used silently when the extra vars didn't set them; set both as job
+  extra vars.
 - Fixed: VMs can be deployed to a different node than the one holding their template. The role finds the template
   in the cluster-wide resource list and clones it on its node with `qm clone --target <node>` (needs the template on
   shared storage); it used to look for the template on the VM's node only and fail. The template's node must be in
