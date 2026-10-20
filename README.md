@@ -71,7 +71,7 @@ Optional per-VM settings, with what happens when they're left out:
 | Setting | Default |
 | --- | --- |
 | `node` | `proxmox.node` |
-| `vmid` | next free VMID (`qm nextid`) |
+| `vmid` | the VMID of the cluster's VM with this name (a re-run), else the next free one (see [VMIDs](#vmids)) |
 | `ip` (CIDR, e.g. `10.0.30.11/24`), `gateway` | allocated from NetBox; gateway from `netbox_gateway_by_bridge` |
 | `dns_servers`, `search_domains` | none (Linux: DHCP/template; Windows needs `dns_servers`) |
 | `cores`, `memory` | 2 cores, 2048 MB |
@@ -318,6 +318,17 @@ The password is set once, on a VM's first deploy (it replaces the template's bui
 play then logs in with it. Changing the credential later doesn't change existing VMs; it only applies to VMs
 deployed afterwards, so re-runs against older VMs need the password they were deployed with.
 
+## VMIDs
+
+The job only ever changes the VM it deploys, found by its name:
+
+- **Without `vmid`:** a VM with the same name anywhere in the cluster (names compared ignoring case) is this VM, and a
+  re-run reconciles it. Otherwise Proxmox allocates the next free VMID (`pvesh get /cluster/nextid`); if that fails,
+  the job fails.
+- **With `vmid`:** the VMID must be free, or belong to a VM with this name.
+- **Anything else stops the job before it changes anything:** a VMID that belongs to another VM, a template or a
+  container, several VMs with this name, or the VM on another node than `node`.
+
 ## Troubleshooting network settings
 
 Before cloning, the job checks net0's gateway (`gateway` on the VM, else `netbox_gateway_by_bridge[<bridge>]`) is
@@ -330,6 +341,14 @@ outside it leaves the VM unreachable from every other network, though it gets it
 - **An existing VM with the wrong gateway**: fix the extra vars and re-run the job (it updates `ipconfig0`), then
   reboot the VM. cloud-init applies the network settings at boot; the change gives it a new instance ID, so it also
   regenerates the SSH host keys.
+
+## Troubleshooting VMIDs
+
+- **"VMID … is the VM …, not …"**: the `vmid` on the VM (or the one Proxmox allocated) belongs to another VM; nothing
+  was changed. Leave `vmid` out, or pick a free one.
+- **"… VMs in the cluster are named …"**: two VMs share the name; rename or remove one, or set `vmid` to choose.
+- **"… is on Proxmox node …, not …"**: the VM exists on another node. Set `node` on the VM to that node's inventory
+  host, or migrate the VM to `node` first.
 
 ## Troubleshooting Windows deployments
 
