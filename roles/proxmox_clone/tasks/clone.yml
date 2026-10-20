@@ -22,7 +22,6 @@
       changed_when: >-
         qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower)
         or 'created' in (qm_clone_full.stdout | lower))
-      failed_when: qm_clone_full.rc != 0 and ('already exists' not in (qm_clone_full.stderr | default('')) )
       when:
         - not target_exists
         - not (use_linked_clone | bool)
@@ -41,7 +40,6 @@
       changed_when: >-
         qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower)
         or 'created' in (qm_clone_linked.stdout | lower))
-      failed_when: qm_clone_linked.rc != 0 and ('already exists' not in (qm_clone_linked.stderr | default('')) )
       when:
         - not target_exists
         - use_linked_clone | bool

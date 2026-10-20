@@ -123,9 +123,3 @@
           Mount a newly attached disk yourself: /usr/local/sbin/setup-data-disk <name> <fs> <mount point> (copy
           it from proxmox-deploy's roles/proxmox_clone/files/ if the VM doesn't have it).
       when: target_exists
-
-# Bump next_vmid if auto-calculated
-- name: Bump next_vmid if we auto-calculated
-  ansible.builtin.set_fact:
-    next_vmid: "{{ next_vmid | int + 1 }}"
-  when: vm_item.vmid is not defined or (vm_item.vmid | int) == 0

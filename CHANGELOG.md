@@ -5,6 +5,12 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Fixed: a deployment could reconfigure an unrelated VM. When VMID allocation failed the job fell back to VMID 100,
+  checked whether the VMID existed before allocating it (and only on one node), and treated `qm clone`'s "already
+  exists" as success, then applied the new VM's hardware, network, cloud-init, NetBox and DNS settings to the VM
+  holding the VMID. Now a VM is found by name cluster-wide (a re-run reuses it), new VMIDs come from
+  `pvesh get /cluster/nextid` with no fallback, a VMID owned by another VM, template or container stops the job
+  before any change, and a failed clone fails. Removed the `next_vmid` counter.
 - Removed: the example `provision_vms` list in `group_vars/proxmox.yml`. It was live, so a job without
   `provision_vms` in its extra vars would have deployed its two example VMs; such a job now fails with "No
   provision_vms defined".

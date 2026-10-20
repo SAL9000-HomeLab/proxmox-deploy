@@ -12,8 +12,7 @@
 
 - name: Prepare VM variables (robust defaults, uses .get())
   ansible.builtin.set_fact:
-    desired_vmid: >-
-      {{ vm_item.vmid if (vm_item.vmid is defined and vm_item.vmid) else (next_vmid | default(0)) }}
+    desired_vmid: "{{ vm_item.vmid | default(0, true) | int }}"
     node_name: >-
       {{ vm_item.node
          | default( proxmox_cb.get('node') | default(proxmox_defaults_cb.get('node','pve01')) ) }}
@@ -41,21 +40,6 @@
          else (proxmox_cb.linked_clone | bool) if 'linked_clone' in proxmox_cb
          else (not (proxmox_cb.full_clone | bool)) if 'full_clone' in proxmox_cb
          else false }}
-  run_once: false
-
-- name: Run qm list on node to discover existing VMs
-  ansible.builtin.command:
-    cmd: qm list
-  delegate_to: "{{ node_name }}"
-  become: true
-  register: qm_list_full
-  changed_when: false
-
-- name: Determine if target vmid exists on node
-  ansible.builtin.set_fact:
-    target_exists: >-
-      {{ (qm_list_full.stdout_lines | select('match', '^\s*' + (desired_vmid | string) + '\s') | list)
-         | length > 0 }}
   run_once: false
 
 # A template belongs to one node, but qm only sees the VMs on its own node. Find the template in the cluster-wide
@@ -146,40 +130,89 @@
       {{ vm_name }}: {{ cloud_type }} ({{ 'os_type on the VM' if vm_item.os_type is defined
       else 'template ' ~ vm_item.template_vmid ~ ' ostype ' ~ template_ostype }})
 
-# --- Ensure we have a valid desired_vmid (auto-allocate if vm_item.vmid not set) ---
-- name: Lookup next available VMID on node (if needed)
+# --- The VM's VMID -------------------------------------------------------------------------------------------
+# Never touch a VM that isn't this one. A VMID given on the VM must be free or belong to a VM of the same name; without
+# one, a VM of the same name anywhere in the cluster is this VM (a re-run), else Proxmox allocates a new VMID. The
+# job used to fall back to VMID 100 when allocation failed, and treated "VM already exists" as success, so it
+# reconfigured whatever VM held the VMID.
+- name: Read the cluster's VMs, templates and containers
+  ansible.builtin.set_fact:
+    # template: 0 unless Proxmox says otherwise, so the filters below can test it on every entry
+    vmid_resources: >-
+      {{ [{'template': 0}] | product(cluster_vms.stdout | from_json) | map('combine') | list }}
+
+- name: Find VMs with this name in the cluster
+  ansible.builtin.set_fact:
+    vmid_same_name: >-
+      {{ vmid_resources | selectattr('type', 'equalto', 'qemu')
+         | rejectattr('template', 'equalto', 1) | selectattr('name', 'defined')
+         | selectattr('name', 'match', '(?i)^' ~ (vm_name | regex_escape) ~ '$') | list }}
+
+- name: Fail when several VMs have this name
+  ansible.builtin.fail:
+    msg: >-
+      {{ vmid_same_name | length }} VMs in the cluster are named {{ vm_name }}
+      ({{ vmid_same_name | map(attribute='vmid') | join(', ') }}). Rename or remove the extra ones, or set vmid on the
+      VM.
+  when: vmid_same_name | length > 1
+
+- name: Reuse the VMID of the VM with this name
+  ansible.builtin.set_fact:
+    desired_vmid: "{{ vmid_same_name[0].vmid | int }}"
+  when:
+    - desired_vmid | int == 0
+    - vmid_same_name | length == 1
+
+- name: Ask Proxmox for the next free VMID
   ansible.builtin.command:
-    cmd: qm nextid
+    cmd: pvesh get /cluster/nextid --output-format json
   delegate_to: "{{ node_name }}"
   become: true
-  register: qm_nextid_raw
-  failed_when: false
+  register: vmid_nextid
   changed_when: false
-  when: desired_vmid | default(0) | int == 0
+  when: desired_vmid | int == 0
 
-- name: Set next_vmid from qm nextid output (or fallback)
+- name: Use the allocated VMID
   ansible.builtin.set_fact:
-    next_vmid: >-
-      {{ (qm_nextid_raw.stdout | default('') | regex_search('\d+') | default('')) | int
-         if (qm_nextid_raw is defined and (qm_nextid_raw.stdout | default('') | length) > 0)
-         else (next_vmid | default(100) | int) }}
-  when: desired_vmid | default(0) | int == 0
-  run_once: false
+    desired_vmid: "{{ vmid_nextid.stdout | from_json | int }}"
+  when: desired_vmid | int == 0
 
-- name: Use auto-allocated next_vmid if desired_vmid was empty/zero
+- name: Look the VMID up in the cluster
   ansible.builtin.set_fact:
-    desired_vmid: "{{ next_vmid | int }}"
-  when: desired_vmid | default(0) | int == 0
-  run_once: false
+    vmid_owner: >-
+      {{ (vmid_resources | selectattr('vmid', 'equalto', desired_vmid | int) | list + [{}]) | first }}
 
-- name: Assert desired_vmid is valid
-  ansible.builtin.assert:
-    that:
-      - desired_vmid is defined
-      - (desired_vmid | int) > 0
-    fail_msg: >-
-      desired_vmid is missing or invalid ({{ desired_vmid }}).
-      qm nextid output: {{ qm_nextid_raw.stdout | default('') }}
+- name: Fail when the VMID belongs to something else
+  ansible.builtin.fail:
+    msg: >-
+      VMID {{ desired_vmid }} is {{ 'a container' if vmid_owner.type | default('') != 'qemu'
+      else ('the template' if (vmid_owner.template | default(0) | int) == 1 else 'the VM') }}
+      {{ vmid_owner.name | default('(no name)') }} on {{ vmid_owner.node | default('?') }}, not {{ vm_name }}.
+      Nothing was changed. Set a free vmid on the VM, or leave vmid out to get a new one.
+  when:
+    - vmid_owner.vmid is defined
+    - vmid_owner.type | default('') != 'qemu'
+      or (vmid_owner.name | default('') | upper) != vm_name
+      or (vmid_owner.template | default(0) | int) == 1
+
+- name: Fail when the VM is on another node
+  ansible.builtin.fail:
+    msg: >-
+      {{ vm_name }} (VMID {{ desired_vmid }}) is on Proxmox node {{ vmid_owner.node }}, not {{ target_pve_node }}
+      ({{ node_name }}). Set node on the VM to {{ vmid_owner.node }}'s inventory host, or migrate it first.
+  when:
+    - vmid_owner.vmid is defined
+    - vmid_owner.node != target_pve_node
+
+- name: Note whether the VM exists already
+  ansible.builtin.set_fact:
+    target_exists: "{{ vmid_owner.vmid is defined }}"
+
+- name: Show the VM's VMID
+  ansible.builtin.debug:
+    msg: >-
+      {{ vm_name }}: VMID {{ desired_vmid }}
+      ({{ 'existing VM, reconciled' if target_exists else 'new VM, cloned from ' ~ vm_item.template_vmid }})
 
 - name: Resolve SSH keys for the Linux admin user (role-wide + per-VM)
   ansible.builtin.set_fact:
