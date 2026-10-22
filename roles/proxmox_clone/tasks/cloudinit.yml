@@ -176,11 +176,11 @@
       when: item.json.count | int == 0
       changed_when: true
 
+    # A list built by a filter chain, not JSON text from a {% for %} loop: since ansible-core 2.19 that text stays
+    # a string and NetBox rejects it ("Expected a list of items but got type str").
     - name: Build NetBox tag objects (name-keyed; avoids NetBox treating numeric-looking tags as related-object IDs)
       ansible.builtin.set_fact:
-        netbox_tag_objects: >-
-          [{% for t in desired_tags %}{"name": {{ t | to_json }}}{% if not loop.last %},
-          {% endif %}{% endfor %}]
+        netbox_tag_objects: "{{ desired_tags | map('string') | map('community.general.dict_kv', 'name') | list }}"
       when: (desired_tags | default([]) | length) > 0
 
     # dns_name uses the VM's domain, else the same zone the Technitium record goes in.
