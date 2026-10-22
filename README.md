@@ -279,6 +279,7 @@ the new VMs on 5985 and 5986. Tested with Ascender (an AWX distribution) running
 `site.yml`'s first play targets the inventory group **`proxmox`**: put every Proxmox node a VM can be deployed to
 in it (`ansible_user: root`, `ansible_python_interpreter: /usr/bin/python3`), with the node's SSH key as the job's
 Machine credential. A VM's `node` must be one of those host names exactly, because every `qm` command runs on it.
+The VMs are provisioned once, by the play's first host, which delegates each VM's tasks to its node.
 The second play's group (`proxmox_deploy_windows`) is filled by the first and needs no inventory entry.
 
 `qm list` only shows the VMs on its own node. When a VM has been migrated to another node, set its `node` to the

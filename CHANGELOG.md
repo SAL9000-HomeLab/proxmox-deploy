@@ -5,6 +5,13 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Fixed: with several nodes in the `proxmox` group, every node provisioned every VM, so each `qm clone` ran once per
+  node at the same time and all but one failed with "config file already exists". The play's first host now
+  provisions the VMs.
+- Fixed: on ansible-core 2.19 and later, reserving an IP for a VM with `tags` failed with NetBox's "Expected a list
+  of items but got type str": the tag list was built as JSON text, which those versions no longer turn into a list.
+  It is now built with `community.general.dict_kv`, which is added to `requirements.yml`.
+
 - Fixed: a deployment could reconfigure an unrelated VM. When VMID allocation failed the job fell back to VMID 100,
   checked whether the VMID existed before allocating it (and only on one node), and treated `qm clone`'s "already
   exists" as success, then applied the new VM's hardware, network, cloud-init, NetBox and DNS settings to the VM

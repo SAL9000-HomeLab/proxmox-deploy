@@ -2,6 +2,9 @@
 collections:
   - name: effectivelywild.technitium_dns
     version: '1.1.2'
+  # proxmox_clone (dict_kv for NetBox tags)
+  - name: community.general
+    version: ">=9.0.0"
   # windows_domain_member
   - name: ansible.windows
     version: ">=2.5.0,<4.0.0"
