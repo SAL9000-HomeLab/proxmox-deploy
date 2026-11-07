@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  author: Roland Serman
+  description: >-
+    Joins a Windows Server VM to Active Directory, adds domain groups to local Administrators, enrolls an ADCS
+    computer certificate and serves WinRM over HTTPS with it
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Windows
+      versions:
+        - "2025"
+  galaxy_tags:
+    - windows
+    - activedirectory
+    - winrm
+
+dependencies: []

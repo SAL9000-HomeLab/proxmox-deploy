@@ -1,0 +1,3 @@
+# Controller (AWX execution environment) Python packages for the windows_domain_member play, which connects to
+# the new Windows VMs over PSRP.
+pypsrp>=0.8.0

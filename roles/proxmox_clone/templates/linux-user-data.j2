@@ -1,0 +1,58 @@
+#cloud-config
+hostname: {{ guest_hostname }}
+fqdn: {{ guest_hostname }}
+manage_etc_hosts: true
+
+timezone: UTC
+
+ssh_pwauth: false
+
+# The template's build account is locked with no key; this makes it (or a
+# new user, if linux_admin_user is changed) the key-only admin login.
+users:
+  - name: {{ linux_admin_user | default('ansible') | to_json }}
+    shell: /bin/bash
+    lock_passwd: true
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+{% for key in linux_admin_keys_resolved %}
+      - {{ key | to_json }}
+{% endfor %}
+
+package_update: true
+packages:
+  - qemu-guest-agent
+
+runcmd:
+  - systemctl enable qemu-guest-agent
+  - systemctl start qemu-guest-agent
+  # Grow / into a disk enlarged by disk_size. cloud-init's growpart doesn't: the Rocky templates put /
+  # on LVM and don't include growpart, so / would stay at the template's size.
+  - /usr/local/sbin/grow-root-fs
+{# Data disks with a mount point (data_disks.yml attached them with their name as the serial). #}
+{% for disk in data_disks_mounted %}
+  - [/usr/local/sbin/setup-data-disk, {{ disk.name | to_json }}, {{ disk.fs | default('ext4') | to_json }}, {{ disk.mount | to_json }}]
+{% endfor %}
+
+write_files:
+  - path: /usr/local/sbin/grow-root-fs
+    permissions: "0755"
+    content: |
+      {{ lookup('ansible.builtin.file', 'grow-root-fs.sh') | indent(6) }}
+{% if data_disks_mounted | length > 0 %}
+  - path: /usr/local/sbin/setup-data-disk
+    permissions: "0755"
+    content: |
+      {{ lookup('ansible.builtin.file', 'setup-data-disk.sh') | indent(6) }}
+{% endif %}
+{% if vm_item.dns_servers is defined or vm_item.dns is defined %}
+  - path: /etc/resolv.conf
+    content: |
+{# Block tags sit at column 0 so trim_blocks leaves no stray indentation in the file. #}
+{% for ns in (vm_item.dns_servers if vm_item.dns_servers is defined else [vm_item.dns]) %}
+      nameserver {{ ns }}
+{% endfor %}
+{% if vm_item.search_domains is defined %}
+      search {{ vm_item.search_domains | join(' ') }}
+{% endif %}
+{% endif %}

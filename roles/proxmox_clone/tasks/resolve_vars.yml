@@ -1,0 +1,248 @@
+---
+# roles/proxmox_clone/tasks/resolve_vars.yml
+# Resolve per-VM variables and the target vmid (auto-allocating if needed).
+# Expects vm_item loop variable.
+
+- name: Prepare safe defaults (avoid undefined attribute access)
+  ansible.builtin.set_fact:
+    proxmox_cb: "{{ proxmox if (proxmox is defined) else {} }}"
+    proxmox_defaults_cb: "{{ proxmox_defaults if (proxmox_defaults is defined) else {} }}"
+    proxmox_behavior_cb: "{{ proxmox_clone_behavior if (proxmox_clone_behavior is defined) else {} }}"
+  run_once: false
+
+- name: Prepare VM variables (robust defaults, uses .get())
+  ansible.builtin.set_fact:
+    desired_vmid: "{{ vm_item.vmid | default(0, true) | int }}"
+    node_name: >-
+      {{ vm_item.node
+         | default( proxmox_cb.get('node') | default(proxmox_defaults_cb.get('node','pve01')) ) }}
+    storage_name: >-
+      {{ vm_item.storage
+         | default( proxmox_cb.get('storage') | default(proxmox_defaults_cb.get('storage','local')) ) }}
+    # Proxmox and NetBox always get the name in caps (guest_hostname, set below once
+    # the OS is known, is lowercase on Linux and caps on Windows).
+    vm_name: "{{ vm_item.name | upper }}"
+    disk_target: >-
+      {{ vm_item.disk_target
+         | default(
+           proxmox_behavior_cb.get('disk_target')
+           | default( proxmox_cb.get('disk_target') | default(proxmox_defaults_cb.get('disk_target','scsi0')) )
+         )
+      }}
+    # linked_clone (default false = full clone). Per-VM wins, then
+    # proxmox_clone_behavior, then proxmox. At each level the legacy inverse
+    # flag (full / full_clone) is still honoured when linked_clone isn't set.
+    use_linked_clone: >-
+      {{ (vm_item.linked_clone | bool) if vm_item.linked_clone is defined
+         else (not (vm_item.full | bool)) if vm_item.full is defined
+         else (proxmox_behavior_cb.linked_clone | bool) if 'linked_clone' in proxmox_behavior_cb
+         else (not (proxmox_behavior_cb.full_clone | bool)) if 'full_clone' in proxmox_behavior_cb
+         else (proxmox_cb.linked_clone | bool) if 'linked_clone' in proxmox_cb
+         else (not (proxmox_cb.full_clone | bool)) if 'full_clone' in proxmox_cb
+         else false }}
+  run_once: false
+
+# A template belongs to one node, but qm only sees the VMs on its own node. Find the template in the cluster-wide
+# list instead: clone.yml clones it on its node and places the VM on node_name with qm clone --target (Proxmox
+# allows that when the template's disks are on shared storage, e.g. Ceph or NFS).
+- name: List the cluster's VMs and templates
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/resources --type vm --output-format json
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: cluster_vms
+  changed_when: false
+
+- name: Read the target node's Proxmox name
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/status --output-format json
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: cluster_status
+  changed_when: false
+
+- name: Find the template's node
+  ansible.builtin.set_fact:
+    template_resource: >-
+      {{ (cluster_vms.stdout | from_json | selectattr('vmid', 'equalto', vm_item.template_vmid | int) | list
+          + [{}]) | first }}
+    target_pve_node: >-
+      {{ ((cluster_status.stdout | from_json | selectattr('type', 'equalto', 'node')
+           | selectattr('local', 'defined') | selectattr('local', 'equalto', 1) | map(attribute='name') | list)
+          + [node_name | regex_replace('[.].*$', '')]) | first }}
+
+- name: Fail if the template doesn't exist
+  ansible.builtin.fail:
+    msg: >-
+      Template vmid {{ vm_item.template_vmid }} isn't in the Proxmox cluster
+      ({{ node_name }} lists no VM or template with that ID).
+  when: template_resource.node is not defined
+
+# qm commands for the template run on its node: the inventory host named after it (pve01 or pve01.<domain>).
+- name: Find the inventory host for the template's node
+  ansible.builtin.set_fact:
+    template_node_name: >-
+      {{ node_name if template_resource.node == target_pve_node
+         else ((groups['proxmox'] | default([]) | select('match', '^' ~ template_resource.node ~ '([.]|$)') | list)
+               + ['']) | first }}
+
+- name: Fail if the template's node isn't in the inventory
+  ansible.builtin.fail:
+    msg: >-
+      Template {{ vm_item.template_vmid }} is on Proxmox node {{ template_resource.node }}, which has no host in the
+      inventory's proxmox group (named {{ template_resource.node }} or {{ template_resource.node }}.<domain>). Add it:
+      the clone runs there.
+  when: template_node_name | length == 0
+
+# The OS comes from the template's Proxmox OS type (ostype): every Windows type starts with "w" (win11 for
+# Windows Server 2025, win10, w2k8, ...), anything else (l26, or "other" when unset) is treated as Linux.
+# os_type on the VM overrides it.
+- name: Read the template's OS type
+  ansible.builtin.command:
+    cmd: qm config {{ vm_item.template_vmid }}
+  delegate_to: "{{ template_node_name }}"
+  become: true
+  register: template_qm_config
+  changed_when: false
+  when: vm_item.os_type is not defined
+
+- name: Parse the template's OS type
+  ansible.builtin.set_fact:
+    template_ostype: >-
+      {{ ((template_qm_config.stdout | default('') | regex_findall('(?m)^ostype: (\S+)')) + ['other']) | first }}
+
+- name: Set the VM's OS
+  ansible.builtin.set_fact:
+    cloud_type: >-
+      {{ vm_item.os_type if vm_item.os_type is defined
+         else ('windows' if template_ostype is match('w') else 'linux') }}
+
+- name: Set the guest hostname (Linux lowercase, Windows caps)
+  ansible.builtin.set_fact:
+    guest_hostname: >-
+      {{ (vm_item.hostname | default(vm_item.name, true)) | upper
+         if cloud_type == 'windows'
+         else (vm_item.hostname | default(vm_item.name, true)) | lower }}
+
+- name: Show the VM's OS
+  ansible.builtin.debug:
+    msg: >-
+      {{ vm_name }}: {{ cloud_type }} ({{ 'os_type on the VM' if vm_item.os_type is defined
+      else 'template ' ~ vm_item.template_vmid ~ ' ostype ' ~ template_ostype }})
+
+# --- The VM's VMID -------------------------------------------------------------------------------------------
+# Never touch a VM that isn't this one. A VMID given on the VM must be free or belong to a VM of the same name; without
+# one, a VM of the same name anywhere in the cluster is this VM (a re-run), else Proxmox allocates a new VMID. The
+# job used to fall back to VMID 100 when allocation failed, and treated "VM already exists" as success, so it
+# reconfigured whatever VM held the VMID.
+- name: Read the cluster's VMs, templates and containers
+  ansible.builtin.set_fact:
+    # template: 0 unless Proxmox says otherwise, so the filters below can test it on every entry
+    vmid_resources: >-
+      {{ [{'template': 0}] | product(cluster_vms.stdout | from_json) | map('combine') | list }}
+
+- name: Find VMs with this name in the cluster
+  ansible.builtin.set_fact:
+    vmid_same_name: >-
+      {{ vmid_resources | selectattr('type', 'equalto', 'qemu')
+         | rejectattr('template', 'equalto', 1) | selectattr('name', 'defined')
+         | selectattr('name', 'match', '(?i)^' ~ (vm_name | regex_escape) ~ '$') | list }}
+
+- name: Fail when several VMs have this name
+  ansible.builtin.fail:
+    msg: >-
+      {{ vmid_same_name | length }} VMs in the cluster are named {{ vm_name }}
+      ({{ vmid_same_name | map(attribute='vmid') | join(', ') }}). Rename or remove the extra ones, or set vmid on the
+      VM.
+  when: vmid_same_name | length > 1
+
+- name: Reuse the VMID of the VM with this name
+  ansible.builtin.set_fact:
+    desired_vmid: "{{ vmid_same_name[0].vmid | int }}"
+  when:
+    - desired_vmid | int == 0
+    - vmid_same_name | length == 1
+
+- name: Ask Proxmox for the next free VMID
+  ansible.builtin.command:
+    cmd: pvesh get /cluster/nextid --output-format json
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: vmid_nextid
+  changed_when: false
+  when: desired_vmid | int == 0
+
+- name: Use the allocated VMID
+  ansible.builtin.set_fact:
+    desired_vmid: "{{ vmid_nextid.stdout | from_json | int }}"
+  when: desired_vmid | int == 0
+
+- name: Look the VMID up in the cluster
+  ansible.builtin.set_fact:
+    vmid_owner: >-
+      {{ (vmid_resources | selectattr('vmid', 'equalto', desired_vmid | int) | list + [{}]) | first }}
+
+- name: Fail when the VMID belongs to something else
+  ansible.builtin.fail:
+    msg: >-
+      VMID {{ desired_vmid }} is {{ 'a container' if vmid_owner.type | default('') != 'qemu'
+      else ('the template' if (vmid_owner.template | default(0) | int) == 1 else 'the VM') }}
+      {{ vmid_owner.name | default('(no name)') }} on {{ vmid_owner.node | default('?') }}, not {{ vm_name }}.
+      Nothing was changed. Set a free vmid on the VM, or leave vmid out to get a new one.
+  when:
+    - vmid_owner.vmid is defined
+    - vmid_owner.type | default('') != 'qemu'
+      or (vmid_owner.name | default('') | upper) != vm_name
+      or (vmid_owner.template | default(0) | int) == 1
+
+- name: Fail when the VM is on another node
+  ansible.builtin.fail:
+    msg: >-
+      {{ vm_name }} (VMID {{ desired_vmid }}) is on Proxmox node {{ vmid_owner.node }}, not {{ target_pve_node }}
+      ({{ node_name }}). Set node on the VM to {{ vmid_owner.node }}'s inventory host, or migrate it first.
+  when:
+    - vmid_owner.vmid is defined
+    - vmid_owner.node != target_pve_node
+
+- name: Note whether the VM exists already
+  ansible.builtin.set_fact:
+    target_exists: "{{ vmid_owner.vmid is defined }}"
+
+- name: Show the VM's VMID
+  ansible.builtin.debug:
+    msg: >-
+      {{ vm_name }}: VMID {{ desired_vmid }}
+      ({{ 'existing VM, reconciled' if target_exists else 'new VM, cloned from ' ~ vm_item.template_vmid }})
+
+- name: Resolve SSH keys for the Linux admin user (role-wide + per-VM)
+  ansible.builtin.set_fact:
+    linux_admin_keys_resolved: >-
+      {{ ((linux_admin_ssh_keys | default([]))
+          + (vm_item.ssh_authorized_keys | default([])))
+         | map('trim') | select | unique | list }}
+  when: cloud_type == 'linux'
+
+# Templates lock the build account and disable password SSH, so a Linux VM
+# with no keys would boot with no way to log in. Fail before cloning.
+- name: Assert the Linux VM will get at least one SSH key
+  ansible.builtin.assert:
+    that:
+      - linux_admin_keys_resolved | length > 0
+    fail_msg: >-
+      No SSH keys for {{ vm_name }}: set linux_admin_ssh_keys (role-wide, e.g. in AWX)
+      or ssh_authorized_keys on the VM. Without one, nobody can log in to it.
+  when: cloud_type == 'linux'
+
+# Windows VMs get a new local Administrator password over the guest agent and are then joined to the domain by
+# the windows_domain_member play; fail before cloning when the credentials for that are missing.
+- name: Assert the Windows credentials are set
+  ansible.builtin.assert:
+    that:
+      - windows_admin_password | default('') | length > 0
+      - domain_join_user | default('') | length > 0
+      - domain_join_pass | default('') | length > 0
+    fail_msg: >-
+      {{ vm_name }} is a Windows VM: set windows_admin_password (its new local Administrator password) and
+      domain_join_user / domain_join_pass, e.g. from AWX credentials.
+    quiet: true
+  when: cloud_type == 'windows'

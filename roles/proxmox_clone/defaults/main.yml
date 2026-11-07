@@ -1,0 +1,72 @@
+---
+# roles/proxmox_clone/defaults/main.yml
+
+# High-level defaults used by the role (non-sensitive)
+proxmox_defaults:
+  node: pve01.lab.example.com
+  storage: nfs_ssd
+  snippets_dir: /var/lib/vz/snippets
+  disk_target: scsi0
+  # linked_clone: false  # full clones by default; set true (here, in proxmox,
+  #                      # proxmox_clone_behavior or per VM) for linked clones.
+  #                      # Left unset so legacy full/full_clone settings still apply.
+  net_bridge: vnet30
+  net_model: virtio
+  vlan: 30
+  timeout: 300
+  timezone: "EST"
+
+netbox:
+  api_url: ""
+  token: ""
+  ssl_verify: true
+
+netbox_allocate_ip: true
+netbox_ip_ranges_by_bridge: {}
+netbox_gateway_by_bridge: {}
+
+technitium_dns:
+  enabled: false
+  api_url: ""
+  api_port: 5380
+  api_token: ""
+  validate_certs: true
+  zone: ""
+  ttl: 3600
+  create_ptr_zone: true
+
+# Admin account cloud-init sets up on Linux VMs. The vm-templates images ship
+# this user with its password locked and no SSH key, so these keys are the
+# only way in. Set linux_admin_ssh_keys once (e.g. in AWX); a VM's own
+# ssh_authorized_keys are added on top.
+linux_admin_user: ansible
+linux_admin_ssh_keys: []
+
+# Default vm list (empty) - real VM definitions should be placed in group_vars or host_vars
+provision_vms: []
+
+# Example (commented) for maintainers:
+# - name: web-01
+#   template_vmid: 9000
+#   linked_clone: false  # default; true = linked clone on the template's storage
+#   vmid: null
+#   node: pve01.lab.example.com
+#   description: "Internal web server for team X"
+#   domain: "example.com"  # combined with name as dns_name, only applied when NetBox allocates the IP;
+#                          # defaults to dns_zone, then technitium_dns.zone
+#   tags: [linux, web, team-x]  # or "linux,web,team-x"; applied to Proxmox tags, and to
+#                               # NetBox IP tags when NetBox allocates the IP
+#   sockets: 2  # optional; defaults to the template's. A VM has sockets x cores vCPUs
+#   cores: 2
+#   memory: 2048
+#   disk_size: 20G
+#   ip: 192.168.100.101/24
+#   gateway: 192.168.100.1
+#   dns_servers:
+#     - 1.1.1.1
+#   search_domains:
+#     - example.com
+#   dns_zone: "example.com"  # overrides technitium_dns.zone for this VM
+#   dns_name: "web-01.example.com"  # optional; defaults to name + dns_zone
+#   ssh_authorized_keys:
+#     - "ssh-rsa AAAA... user@example"

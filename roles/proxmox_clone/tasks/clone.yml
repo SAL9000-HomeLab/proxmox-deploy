@@ -1,0 +1,54 @@
+---
+# roles/proxmox_clone/tasks/clone.yml
+# Clone the template into the target vmid (if it doesn't already exist) and
+# gather its resulting qm config for the configure/cloudinit steps. The clone runs
+# on the template's node; --target puts the VM on node_name when that's another node.
+# Expects vm_item loop variable and facts from resolve_vars.yml.
+
+- name: Clone template into new VMID (when not exists) using qm (full vs linked)
+  when: not target_exists
+  block:
+    - name: Clone (full clone path)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+          --full
+          --storage {{ storage_name }}
+          {{ ('--target ' ~ target_pve_node) if template_node_name != node_name else '' }}
+      delegate_to: "{{ template_node_name }}"
+      become: true
+      register: qm_clone_full
+      changed_when: >-
+        qm_clone_full.rc == 0 and ('clone' in (qm_clone_full.stdout | lower)
+        or 'created' in (qm_clone_full.stdout | lower))
+      when:
+        - not target_exists
+        - not (use_linked_clone | bool)
+
+    # Linked clones share the template's base disk, so they always land on the
+    # template's storage (qm clone rejects --storage without --full).
+    - name: Clone (linked clone path — no --storage)
+      ansible.builtin.command:
+        cmd: >-
+          qm clone {{ vm_item.template_vmid }} {{ desired_vmid }}
+          --name {{ vm_name }}
+          {{ ('--target ' ~ target_pve_node) if template_node_name != node_name else '' }}
+      delegate_to: "{{ template_node_name }}"
+      become: true
+      register: qm_clone_linked
+      changed_when: >-
+        qm_clone_linked.rc == 0 and ('clone' in (qm_clone_linked.stdout | lower)
+        or 'created' in (qm_clone_linked.stdout | lower))
+      when:
+        - not target_exists
+        - use_linked_clone | bool
+
+- name: Gather VM config after ensure (qm config)
+  ansible.builtin.command:
+    cmd: qm config {{ desired_vmid }}
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_config
+  failed_when: false
+  changed_when: false

@@ -1,0 +1,31 @@
+---
+# roles/proxmox_clone/tasks/provision_vm.yml
+# Per-VM provisioning orchestrator (SSH/qm-based, delegated to node).
+# Expects vm_item loop variable.
+
+- name: Resolve variables and target vmid
+  ansible.builtin.import_tasks: resolve_vars.yml
+
+- name: Check the VM's network settings before cloning
+  ansible.builtin.import_tasks: network_checks.yml
+
+- name: Clone template and gather qm config
+  ansible.builtin.import_tasks: clone.yml
+
+- name: Reconcile CPU/memory, network, tags, and disk size
+  ansible.builtin.import_tasks: configure.yml
+
+- name: Attach and grow data disks
+  ansible.builtin.import_tasks: data_disks.yml
+
+- name: Reconcile cloud-init (Linux), NetBox IP and ipconfig
+  ansible.builtin.import_tasks: cloudinit.yml
+
+- name: Add extra network interfaces (Linux)
+  ansible.builtin.import_tasks: extra_nics.yml
+
+- name: Manage VM DNS records
+  ansible.builtin.import_tasks: technitium_dns.yml
+
+- name: Start VM and wait for guest
+  ansible.builtin.import_tasks: boot.yml

@@ -1,0 +1,425 @@
+# proxmox-deploy
+
+This repository deploys VMs (Linux or Windows) to a Proxmox cluster by cloning a template over
+SSH (`qm`), optionally reserving an IP from NetBox, and configuring the guest: cloud-init on Linux,
+the QEMU guest agent on Windows. Windows VMs are then joined to Active Directory and served over
+WinRM with HTTPS. See [roles/README.md](roles/README.md) for the two roles and their variables.
+
+Use `site.yml` from AWX and pass VM definitions through job extra vars.
+
+The values committed in `inventory/` and `group_vars/` (`example.com`, `10.0.x.x`, the
+`pve01` node, NetBox range IDs) are placeholders. Supply your real environment through your
+AWX inventory and job extra vars, or local files that are gitignored (`local/`,
+`extra-vars*.yml`). Never commit credentials.
+
+## Template catalog contract
+
+The image-building repo (vm-templates) owns the templates. A VM names its template by VMID
+(`template_vmid`); this repo applies the per-VM values such as name, IP, gateway, DNS and tags at
+deployment time. The template names below are a reference for which VMID is which: nothing reads
+`template_catalog` or a VM's `template` field.
+
+```yaml
+template_catalog:
+  rocky9: tpl-rocky-9
+  rocky10: tpl-rocky-10
+  ubuntu2404: tpl-ubuntu-2404
+  windows2025_core: tpl-win2025-c
+  windows2025_desktop: tpl-win2025-d
+```
+
+The deploy repo never creates templates; it only clones the ones vm-templates built.
+
+Minimal job extra vars, one Linux and one Windows VM. Each VM's OS comes from its template's `ostype`, and its IP
+from NetBox:
+
+```yaml
+provision_vms:
+  - name: rocky10-web-01
+    template_vmid: 10001            # the vm-templates template to clone
+  - name: W25C-WEB01
+    template_vmid: 9001
+    dns_servers:                    # Windows: the domain's DNS servers, needed to join the domain
+      - 10.0.30.101
+      - 10.0.30.111
+
+proxmox:
+  node: pve01.lab.example.com       # inventory host in the proxmox group; or `node` per VM
+  storage: vm-pool
+  net_bridge: vnet30
+
+# NetBox range and net0 gateway per bridge. Required for VMs that get their address from NetBox; the repository
+# has no values for them. Use your own range IDs and gateways: the job checks the gateway is in the range's subnet.
+netbox_ip_ranges_by_bridge:
+  vnet30: 19                        # your NetBox IP range ID
+netbox_gateway_by_bridge:
+  vnet30: 10.0.30.1                 # your vnet30 gateway
+
+# Linux VMs: the only way to log in (see below)
+linux_admin_ssh_keys:
+  - "ssh-ed25519 AAAA... admin@example.com"
+
+# Windows VMs (see "Windows VMs")
+domain_name: ad.example.com
+domain_join_ou: "OU=Build,OU=Servers,DC=ad,DC=example,DC=com"
+domain_admin_groups: ['EXAMPLE\ServerAdmins']
+windows_cert_template: ExampleServerAuthentication
+```
+
+Optional per-VM settings, with what happens when they're left out:
+
+| Setting | Default |
+| --- | --- |
+| `node` | `proxmox.node` |
+| `vmid` | the VMID of the cluster's VM with this name (a re-run), else the next free one (see [VMIDs](#vmids)) |
+| `ip` (CIDR, e.g. `10.0.30.11/24`), `gateway` | allocated from NetBox; gateway from `netbox_gateway_by_bridge` |
+| `dns_servers`, `search_domains` | none (Linux: DHCP/template; Windows needs `dns_servers`) |
+| `cores` (per socket), `memory` | 2 cores, 2048 MB |
+| `sockets` (a VM has `sockets` x `cores` vCPUs) | the template's: 2 on Windows Server 2025, 1 on the others |
+| `disk_size` (e.g. `80G`, grow only) | the template's disk size |
+| `data_disks` (extra disks, see [Data disks](#data-disks)) | none |
+| `extra_nics` (Linux, see [Extra network interfaces](#extra-network-interfaces)) | none |
+| `net_bridge`, `vlan`, `storage` | `proxmox.net_bridge`, none, `proxmox.storage` |
+| `tags`, `description` | none (applied in Proxmox, and in NetBox when it allocates the IP) |
+| `linked_clone` | `false` (full clone) |
+| `os_type` | from the template's `ostype` |
+| `timezone` (Windows ID) | UTC |
+| `domain_join_ou`, `admin_groups`, `cert_template` | the job-wide Windows settings |
+
+To also register the VMs in Technitium DNS, add (keys not shown default to `enabled: true` and `ttl: 3600`; the
+PTR zone is only created with `create_ptr_zone: true`):
+
+```yaml
+technitium_dns:
+  zone: lab.example.com
+  api_port: 53443        # default 5380
+  validate_certs: false  # default true
+  create_ptr_zone: true
+```
+
+When enabled, each VM creates an A record named `<name>.<zone>` and its associated
+PTR record. A VM can override the forward zone with `dns_zone`, or the full name with
+`dns_name`.
+
+For AWX, inject the credential as `technitium_dns_api_url` and
+`technitium_dns_api_token`. Keep the API token out of job extra vars.
+
+Linux VMs need at least one SSH public key, because the templates have no usable password.
+Set `linux_admin_ssh_keys` once (e.g. in AWX) and/or `ssh_authorized_keys` per VM. They're
+installed for `linux_admin_user` (default `ansible`), which gets passwordless sudo.
+
+## Data disks
+
+`data_disks` gives a VM extra virtual disks, e.g. for application data kept apart from the system disk. Each
+disk's `name` is its serial in Proxmox: re-runs find the disk by it (whatever slot it's in) and grow it to `size`,
+and Linux guests find it by it. A disk with a `mount` is formatted (only when it's blank) and mounted on the VM's
+first boot by cloud-init, and the job waits until it's mounted.
+
+```yaml
+provision_vms:
+  - name: r10-app-01
+    template_vmid: 9221                 # tpl-rocky-10
+    data_disks:
+      - name: data                      # serial and filesystem label: 1-12 of a-z, 0-9, -
+        size: 200G                      # whole G or T; grow only
+        mount: /srv/data                # Linux only; omit to attach the disk unformatted
+        # fs: ext4                      # or xfs
+        # storage: local-lvm            # default: the VM's storage
+        # options: backup=0             # extra qm disk options, e.g. leave it out of vzdump backups
+```
+
+New disks go in the lowest free SCSI slots after `scsi0`, with `discard=on`. The guest mounts them by UUID in
+`/etc/fstab` with `nofail`. A disk that already has a filesystem is mounted as it is, and one with partitions is left
+alone, so existing data is never overwritten.
+
+cloud-init only formats and mounts on a VM's first boot. A data disk added to an existing VM is attached and the job
+warns; mount it with `/usr/local/sbin/setup-data-disk <name> <fs> <mount point>` on the VM (from
+[roles/proxmox_clone/files](roles/proxmox_clone/files/setup-data-disk.sh) if the VM predates data disks). Growing a
+disk grows the virtual disk only: grow the filesystem in the guest (`resize2fs` / `xfs_growfs`). Windows VMs are the
+exception for C:, which each run grows when its disk has at least 1 GB of new space.
+
+A recovery partition after C: would block that, so the run disables WinRE, deletes the partition, extends C:, creates the
+partition again at the end of the disk at the same size, and enables WinRE. A disk with no recovery partition only has
+C: extended. If another partition follows C:, nothing changes and the job's output says so. Windows data disks aren't
+grown or formatted.
+
+## Templates on another node
+
+A template belongs to one Proxmox node, but a VM can go on any node. The role finds the template's node in the cluster
+(`pvesh get /cluster/resources`), runs `qm clone` there and passes `--target <node>` when the VM's `node` is a
+different one. Proxmox only allows that when the template's disks are on shared storage (Ceph, NFS, …), and the
+template's node must be in the inventory's `proxmox` group (as `pve01` or `pve01.<domain>`), since the clone runs
+there.
+
+## Extra network interfaces
+
+`extra_nics` gives a Linux VM more network interfaces (`net1`, `net2`, … in list order), e.g. a leg on a storage
+network. Each gets a static address with no gateway, so the default route stays on `net0`; cloud-init applies them
+from Proxmox's `ipconfig1`, `ipconfig2`, … like `net0`.
+
+```yaml
+extra_nics:
+  - bridge: vnet173              # required
+    # ip: 10.0.173.21/24         # CIDR, or dhcp; default: the next free address in the bridge's NetBox range
+    # vlan: 173                  # VLAN tag on a VLAN-aware bridge
+    # mtu: 1                     # 1 = the bridge's MTU (use it for jumbo-frame networks); or a number
+    # model: virtio
+```
+
+An interface without `ip` gets its address from NetBox: add a range for its bridge to `netbox_ip_ranges_by_bridge`
+(the job fails before changing anything when there is none). The reservation's description is
+`<NAME> net<N> (<bridge>)`, and it has no DNS name. Re-runs keep the address the VM already has and reserve it in
+NetBox again if the record is gone, as for `net0`. Changing an interface's bridge, VLAN or MTU keeps its MAC address.
+proxmox-deprovision releases these addresses along with the VM's main one (from its version that matches every
+`ipconfigN`).
+
+Only Linux VMs take extra interfaces: Windows guests only configure `net0`.
+
+### RKE2 nodes
+
+Six nodes on three Proxmox hosts: one server and one agent on each host, so losing a host takes out one of the three
+etcd members (the cluster keeps quorum) and a third of the workers. Each node has legs on the Ceph public network
+(for ceph-csi) and the NAS storage network (Synology iSCSI and NFS).
+
+```yaml
+provision_vms:
+  - name: r10-rke2-s01
+    node: pve01.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+    tags: [rke2, rke2-server]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-s02
+    node: pve02.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+    tags: [rke2, rke2-server]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-s03
+    node: pve03.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 4
+    memory: 8192
+    disk_size: 60G
+    tags: [rke2, rke2-server]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-a01
+    node: pve01.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 8
+    memory: 16384
+    disk_size: 80G
+    tags: [rke2, rke2-agent]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-a02
+    node: pve02.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 8
+    memory: 16384
+    disk_size: 80G
+    tags: [rke2, rke2-agent]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+  - name: r10-rke2-a03
+    node: pve03.lab.example.com
+    template_vmid: 9223                 # tpl-rocky-10-rke2
+    cores: 8
+    memory: 16384
+    disk_size: 80G
+    tags: [rke2, rke2-agent]
+    extra_nics: [{bridge: vnet173, mtu: 1}, {bridge: vnet171, mtu: 1}]
+
+netbox_ip_ranges_by_bridge:             # your NetBox range IDs
+  vnet30: 19
+  vnet171: 22                           # the storage networks: no gateway needed
+  vnet173: 23
+netbox_gateway_by_bridge:               # your vnet30 gateway (net0 only)
+  vnet30: 10.0.30.1
+```
+
+Don't use YAML anchors and merge keys (`<<: *name`) in AWX/Ascender extra vars: the web UI converts extra vars to
+JSON without expanding them, so the VMs lose those settings (`'dict object' has no attribute 'template_vmid'`).
+
+Every `node` must be in the inventory's `proxmox` group. The template only has to exist on one node: see
+[Templates on another node](#templates-on-another-node). Kubernetes doesn't know which VMs share a host, so the
+cluster setup labels each node with its host (`topology.kubernetes.io/zone`) to spread replicas across hosts.
+
+## Windows VMs
+
+Windows VMs come from the vm-templates Windows Server 2025 templates, which boot through OOBE
+unattended (see vm-templates' "Windows clones"). Then, in `site.yml`:
+
+1. **proxmox_clone** (first play) clones and starts the VM, waits for the QEMU guest agent and the
+   template's first-boot setup, and runs a PowerShell script in the guest as SYSTEM: static IP,
+   gateway, DNS servers and search list, the timezone (`timezone`, optional) and a new local
+   Administrator password. It then waits for WinRM on 5985.
+2. **windows_domain_member** (second play, over PSRP/NTLM as that Administrator) joins the domain
+   into the OU and renames the computer, adds the admin groups to local Administrators, enrolls an
+   ADCS computer certificate and binds the WinRM HTTPS listener (5986) to it, with a scheduled task
+   that rebinds it when autoenrollment renews the certificate.
+
+Afterwards the VM can be managed over PSRP with Kerberos on 5986 (as ans-defos does).
+
+| Variable | Where | Purpose |
+| --- | --- | --- |
+| `windows_admin_password` | Credential | New local Administrator password (replaces the template's build password on the first deploy). |
+| `domain_join_user` / `domain_join_pass` | Credential | Account that joins computers to the domain (`DOMAIN\user` or `user@domain`). |
+| `domain_name`, `domain_join_ou` | Job extra vars | Domain to join and the OU for new computer accounts (per VM: `domain_join_ou`). |
+| `domain_admin_groups` | Job extra vars | Domain groups added to local Administrators (per VM: `admin_groups`). |
+| `windows_cert_template` | Job extra vars | ADCS template to enroll in (per VM: `cert_template`). See [the certificate requirements](roles/windows_domain_member/README.md#the-certificate): Server Authentication, and subject name format **Common name**. |
+
+Set the domain variables and the NetBox maps (`netbox_ip_ranges_by_bridge` / `netbox_gateway_by_bridge`, which the
+repository leaves unset) as **job template extra vars**, not as inventory variables. The placeholder values in this
+repository's
+`group_vars/` sit next to `site.yml`, and Ansible ranks playbook `group_vars` above an AWX/Ascender
+inventory's own variables, so inventory values are silently ignored. Only extra vars outrank them. A
+`technitium_dns` or `proxmox` dictionary in extra vars replaces the repository's whole dictionary (no merge).
+
+The execution environment needs `pypsrp` ([requirements.txt](requirements.txt)), and the controller must reach
+the new VMs on 5985 and 5986. Tested with Ascender (an AWX distribution) running `site.yml`.
+
+### Inventory
+
+`site.yml`'s first play targets the inventory group **`proxmox`**: put every Proxmox node a VM can be deployed to
+in it (`ansible_user: root`, `ansible_python_interpreter: /usr/bin/python3`), with the node's SSH key as the job's
+Machine credential. A VM's `node` must be one of those host names exactly, because every `qm` command runs on it.
+The VMs are provisioned once, by the play's first host, which delegates each VM's tasks to its node.
+The second play's group (`proxmox_deploy_windows`) is filled by the first and needs no inventory entry.
+
+`qm list` only shows the VMs on its own node. When a VM has been migrated to another node, set its `node` to the
+node it's on now before re-running the job for it; otherwise the role looks for it on the old node, finds nothing
+and tries to clone it again.
+
+### AWX credential for the Windows Administrator password
+
+The job template's Machine credential is already used for the SSH login to the Proxmox nodes, and a job
+template takes only one Machine credential, so `windows_admin_password` comes from a custom credential type.
+
+1. Under **Administration → Credential Types → Add**, name it `Windows local administrator` and paste:
+
+   ```yaml
+   # Input configuration
+   fields:
+     - id: windows_admin_password
+       label: "Local Administrator password (new Windows VMs)"
+       type: string
+       secret: true
+   required:
+     - windows_admin_password
+   ```
+
+   ```yaml
+   # Injector configuration
+   extra_vars:
+     windows_admin_password: "{{ windows_admin_password }}"
+   ```
+
+2. Under **Resources → Credentials → Add**, create a credential of type `Windows local administrator` with the
+   password.
+3. Attach it to the `site.yml` job template, next to the Machine credential (Proxmox SSH) and the credentials
+   that supply `domain_join_user` / `domain_join_pass`, NetBox and Technitium.
+
+The password is set once, on a VM's first deploy (it replaces the template's build password), and the domain
+play then logs in with it. Changing the credential later doesn't change existing VMs; it only applies to VMs
+deployed afterwards, so re-runs against older VMs need the password they were deployed with.
+
+## VMIDs
+
+The job only ever changes the VM it deploys, found by its name:
+
+- **Without `vmid`:** a VM with the same name anywhere in the cluster (names compared ignoring case) is this VM, and a
+  re-run reconciles it. Otherwise Proxmox allocates the next free VMID (`pvesh get /cluster/nextid`); if that fails,
+  the job fails.
+- **With `vmid`:** the VMID must be free, or belong to a VM with this name.
+- **Anything else stops the job before it changes anything:** a VMID that belongs to another VM, a template or a
+  container, several VMs with this name, or the VM on another node than `node`.
+
+## Troubleshooting network settings
+
+Before cloning, the job checks net0's gateway (`gateway` on the VM, else `netbox_gateway_by_bridge[<bridge>]`) is
+in the VM's subnet: that of `ip`, or of the bridge's NetBox range when NetBox allocates the address. A gateway
+outside it leaves the VM unreachable from every other network, though it gets its address and NICs as normal.
+
+- **"gateway … isn't in …"**: fix the gateway it names. The extra vars replace the whole map, so check every bridge
+  in it.
+- **"… need an entry for `<bridge>`"**: add the bridge's NetBox range ID and gateway to the extra vars.
+- **An existing VM with the wrong gateway**: fix the extra vars and re-run the job (it updates `ipconfig0`), then
+  reboot the VM. cloud-init applies the network settings at boot; the change gives it a new instance ID, so it also
+  regenerates the SSH host keys.
+
+## Troubleshooting VMIDs
+
+- **"VMID … is the VM …, not …"**: the `vmid` on the VM (or the one Proxmox allocated) belongs to another VM; nothing
+  was changed. Leave `vmid` out, or pick a free one.
+- **"… VMs in the cluster are named …"**: two VMs share the name; rename or remove one, or set `vmid` to choose.
+- **"… is on Proxmox node …, not …"**: the VM exists on another node. Set `node` on the VM to that node's inventory
+  host, or migrate the VM to `node` first.
+
+## Troubleshooting Windows deployments
+
+- **"never finished its first boot: no SetupComplete.done"**: the role looked inside the guest and says why:
+  - _was never generalized_ (the clone has the build's computer name and `IMAGE_STATE_UNDEPLOYABLE`): sysprep
+    didn't finish when the template was built. Rebuild the template; current vm-templates fails the build when
+    sysprep doesn't generalize.
+  - _replayed the template build's answer file_ / _SetupComplete.cmd doesn't write SetupComplete.done_: the
+    template predates vm-templates' clone answer file. Rebuild it.
+  - _Windows Setup is still at …_: OOBE is waiting or failed; check the VM's console.
+
+  Keep the VM until you've looked: delete it (and its NetBox and DNS records) only before the redeploy.
+- **"An internal error occurred" creating the WinRM HTTPS listener**: the certificate has no subject CN. Set the
+  ADCS template's subject name format to **Common name** and re-run; the role skips the CN-less certificate and
+  enrolls a new one.
+- **A re-run reuses an IP NetBox doesn't know**: the address in the VM's `ipconfig0` is reserved again in NetBox
+  for the VM (the job log warns). To get a new address instead, `qm set <vmid> --delete ipconfig0` first.
+- **Looking inside a VM** without network access: `qm guest exec` runs commands as SYSTEM over the guest agent.
+  Single-quote the PowerShell for bash (in double quotes, bash treats a backtick as command substitution), and
+  unwrap the JSON output:
+
+  ```shell
+  vmid=$(qm list | awk 'toupper($2) == "W25C-TEST001" {print $1}')
+  qm guest exec "$vmid" --timeout 60 -- powershell.exe -NoProfile -Command 'hostname; Get-ChildItem Cert:\LocalMachine\My | Format-List Subject, Thumbprint, NotAfter' \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("out-data","")); print(d.get("err-data",""))'
+  ```
+
+  Run it on the node the VM is on now (`qm list` on each node).
+
+## Development and CI
+
+Two workflows call reusable workflows from
+[`SAL9000-HomeLab/shared-actions`](https://github.com/SAL9000-HomeLab/shared-actions):
+
+- **Ansible CI** (`.github/workflows/ansible-ci.yml`), on every pull request:
+  - `yamllint`, then `ansible-playbook --syntax-check` on `site.yml`.
+  - `ansible-lint` using [`.ansible-lint`](.ansible-lint). The only rule skipped is
+    `var-naming[no-role-prefix]`: the role's variables (`provision_vms`, `proxmox`, `netbox`,
+    `technitium_dns`, `linux_admin_*`, …) are set by AWX job templates and inventories, so
+    prefixing them with `proxmox_clone_` would break existing callers.
+- **Linting Validation** (`.github/workflows/ci.yml`), on pull requests to `main`:
+  - Markdown lint (`markdownlint-cli2`) using [`.markdownlint.json`](.markdownlint.json):
+    120-column lines (code blocks and tables exempt), `_emphasis_` and `**strong**`.
+  - Link check (linkspector) using [`.linkspector.yml`](.linkspector.yml). Findings are
+    reported on the pull request. Links to this org's GitHub repos are skipped.
+  - `yamllint` again, standalone.
+
+Both YAML checks read [`.yamllint.yml`](.yamllint.yml): the default rules with 120-column
+lines (matching the editor ruler in `.vscode/settings.json`), with truthy checks skipped for
+GitHub workflows (`on:`). The file must keep the `.yml` name, because the shared `lint-yaml`
+workflow loads it by that exact path.
+
+Run the same checks locally before opening a pull request:
+
+```sh
+python3 -m venv .venv && . .venv/bin/activate
+pip install "yamllint>=1.30" "ansible>=2.15" "ansible-lint>=6"
+ansible-galaxy collection install -r requirements.yml
+yamllint -f parsable .
+ansible-playbook -i localhost, -c local --syntax-check site.yml
+ansible-lint .
+npx markdownlint-cli2 "**/*.md" "#.venv"
+```
+
+Add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) with each change. Pushing a
+`vX.Y.Z` tag publishes that version's section as a GitHub release.

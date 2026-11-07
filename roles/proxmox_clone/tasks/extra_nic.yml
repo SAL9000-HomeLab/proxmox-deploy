@@ -1,0 +1,118 @@
+---
+# roles/proxmox_clone/tasks/extra_nic.yml
+# Reconcile one extra NIC (extra_nic, index extra_nic_index) as net<N>/ipconfig<N>, N = index + 1. The address is
+# extra_nic.ip, else the one the VM already has (re-runs), else the next free one in the bridge's NetBox range.
+# Expects facts from extra_nics.yml.
+
+- name: Read the interface's current settings
+  ansible.builtin.set_fact:
+    extra_nic_slot: "{{ extra_nic_index + 1 }}"
+    extra_nic_current: >-
+      {{ (((qm_config.stdout | default('')) | regex_findall('(?m)^net' ~ (extra_nic_index + 1) ~ ': (.*)$'))
+          + ['']) | first }}
+    extra_nic_current_ipconfig: >-
+      {{ (((qm_config.stdout | default('')) | regex_findall('(?m)^ipconfig' ~ (extra_nic_index + 1) ~ ': (.*)$'))
+          + ['']) | first }}
+
+# qm config shows a NIC as <model>=<MAC>,bridge=...,tag=...,mtu=...; keep the MAC when changing it.
+- name: Compare the interface with its settings
+  ansible.builtin.set_fact:
+    extra_nic_current_opts: "{{ dict(extra_nic_current | regex_findall('([a-z0-9]+)=([^,]+)') | map('list')) }}"
+    extra_nic_model: "{{ extra_nic.model | default('virtio') }}"
+    extra_nic_current_ip: >-
+      {{ ((extra_nic_current_ipconfig | regex_findall('(?:^|,)ip=([^,]+)')) + ['']) | first }}
+
+- name: Build the interface's configuration
+  ansible.builtin.set_fact:
+    extra_nic_mac: >-
+      {{ ((extra_nic_current | regex_findall('^[a-z0-9]+=([0-9A-Fa-f:]{17})')) + ['']) | first }}
+    extra_nic_needs_update: >-
+      {{ extra_nic_model not in extra_nic_current_opts
+         or extra_nic_current_opts.bridge | default('') != extra_nic.bridge
+         or extra_nic_current_opts.tag | default('') != extra_nic.vlan | default('') | string
+         or extra_nic_current_opts.mtu | default('') != extra_nic.mtu | default('') | string }}
+
+- name: Build the interface's net string
+  ansible.builtin.set_fact:
+    extra_nic_config: >-
+      {{ extra_nic_model }}{{ ('=' ~ extra_nic_mac) if extra_nic_mac | length > 0 else '' }},bridge={{
+      extra_nic.bridge }}{{ (',tag=' ~ extra_nic.vlan) if extra_nic.vlan is defined else '' }}{{
+      (',mtu=' ~ extra_nic.mtu) if extra_nic.mtu is defined else '' }}
+
+- name: Add or update the interface (qm set)
+  ansible.builtin.command:
+    argv: [qm, set, "{{ desired_vmid }}", "--net{{ extra_nic_slot }}", "{{ extra_nic_config }}"]
+  delegate_to: "{{ node_name }}"
+  become: true
+  changed_when: true
+  when: extra_nic_needs_update | bool
+
+# --- Address ---------------------------------------------------------------------------------------------------------
+
+- name: Use the address from the settings or the VM
+  ansible.builtin.set_fact:
+    extra_nic_ip: "{{ extra_nic.ip | default(extra_nic_current_ip, true) }}"
+    extra_nic_netbox_body:
+      description: "{{ vm_name }} net{{ extra_nic_slot }} ({{ extra_nic.bridge }})"
+
+# Same as net0: an address the VM already uses must stay reserved in NetBox.
+- name: Check the interface's existing address is reserved in NetBox
+  ansible.builtin.uri:
+    url: >-
+      {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-addresses/?address={{ extra_nic_ip | urlencode }}
+    method: GET
+    headers:
+      Authorization: "{{ netbox_resolved_authorization }}"
+      Accept: application/json
+  register: extra_nic_netbox_existing
+  when:
+    - extra_nic.ip is not defined
+    - extra_nic_ip | length > 0
+    - extra_nic_ip != 'dhcp'
+    - netbox_allocate_ip | default(true) | bool
+    - netbox_resolved_api_url | length > 0
+
+- name: Reserve the interface's existing address in NetBox again
+  ansible.builtin.uri:
+    url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-addresses/"
+    method: POST
+    headers:
+      Authorization: "{{ netbox_resolved_authorization }}"
+      Accept: application/json
+    body_format: json
+    body: "{{ extra_nic_netbox_body | combine({'address': extra_nic_ip, 'status': 'active'}) }}"
+    status_code: 201
+  changed_when: true
+  when:
+    - extra_nic_netbox_existing is not skipped
+    - extra_nic_netbox_existing.json.count | default(1) | int == 0
+
+- name: Allocate the interface's address from NetBox
+  ansible.builtin.uri:
+    url: >-
+      {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_ranges_by_bridge[extra_nic.bridge]
+      }}/available-ips/
+    method: POST
+    headers:
+      Authorization: "{{ netbox_resolved_authorization }}"
+      Accept: application/json
+    body_format: json
+    body: "{{ extra_nic_netbox_body }}"
+    status_code: 201
+  register: extra_nic_netbox_new
+  changed_when: true
+  when: extra_nic_ip | length == 0
+
+- name: Use the address NetBox allocated
+  ansible.builtin.set_fact:
+    extra_nic_ip: "{{ extra_nic_netbox_new.json.address }}"
+  when: extra_nic_netbox_new is not skipped
+
+# No gateway: the default route stays on net0.
+- name: Set the interface's address (qm set ipconfig)
+  ansible.builtin.command:
+    argv: [qm, set, "{{ desired_vmid }}", "--ipconfig{{ extra_nic_slot }}", "ip={{ extra_nic_ip }}"]
+  delegate_to: "{{ node_name }}"
+  become: true
+  changed_when: true
+  when: extra_nic_current_ipconfig != 'ip=' ~ extra_nic_ip

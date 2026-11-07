@@ -1,0 +1,106 @@
+# Changelog
+
+All notable changes to this project are documented here. Releases are cut by
+pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
+
+## [Unreleased]
+
+- Removed: `local/*.real`, which held real lab names and addresses and were tracked despite the `.gitignore`. The repository
+  was recreated with new history, so earlier PR numbers no longer exist and are removed from this file.
+- Added: Windows deploys grow C: into new disk space. A recovery partition after C: is deleted and created again at the
+  end of the disk, with WinRE disabled and enabled around it. This also applies to existing VMs when the job runs again.
+- Fixed: Windows deploys could fail with "QEMU guest agent is not running" while the guest configuration script was still
+  running. `qm guest exec` gives up the first time the agent misses a 3 second ping, which a guest busy with its first
+  boot can do. The task now starts the script and polls for its result, retrying through a missed ping.
+- Added: `sockets` on a VM or in `proxmox`. Without it a VM keeps its template's socket count, and a VM has `sockets` x
+  `cores` vCPUs. Windows Server 2025 templates now have 2 sockets, so halve `cores` on those VMs to keep the same vCPUs.
+- Fixed: with several nodes in the `proxmox` group, every node provisioned every VM, so each `qm clone` ran once per
+  node at the same time and all but one failed with "config file already exists". The play's first host now
+  provisions the VMs.
+- Fixed: on ansible-core 2.19 and later, reserving an IP for a VM with `tags` failed with NetBox's "Expected a list
+  of items but got type str": the tag list was built as JSON text, which those versions no longer turn into a list.
+  It is now built with `community.general.dict_kv`, which is added to `requirements.yml`.
+
+- Fixed: a deployment could reconfigure an unrelated VM. When VMID allocation failed the job fell back to VMID 100,
+  checked whether the VMID existed before allocating it (and only on one node), and treated `qm clone`'s "already
+  exists" as success, then applied the new VM's hardware, network, cloud-init, NetBox and DNS settings to the VM
+  holding the VMID. Now a VM is found by name cluster-wide (a re-run reuses it), new VMIDs come from
+  `pvesh get /cluster/nextid` with no fallback, a VMID owned by another VM, template or container stops the job
+  before any change, and a failed clone fails. Removed the `next_vmid` counter.
+- Removed: the example `provision_vms` list in `group_vars/proxmox.yml`. It was live, so a job without
+  `provision_vms` in its extra vars would have deployed its two example VMs; such a job now fails with "No
+  provision_vms defined".
+- Fixed: a job without `proxmox` in its extra vars failed with "recursive loop detected in template string":
+  `site.yml` passed `proxmox: "{{ proxmox | default({}) }}"` (and `provision_vms` likewise) as role parameters,
+  which refer to themselves. The role reads both variables directly.
+- Added: before cloning, the job checks net0's gateway is in the VM's subnet (of `ip`, or of the bridge's NetBox
+  range) and that a VM whose address comes from NetBox has a range and a gateway for its bridge. A placeholder
+  gateway (`10.0.30.1` on a `10.0.40.0/24` range) used to deploy VMs nothing outside their subnet could reach.
+- Removed: the placeholder `netbox_ip_ranges_by_bridge` and `netbox_gateway_by_bridge` in `group_vars/proxmox.yml`.
+  They outranked inventory variables and were used silently when the extra vars didn't set them; set both as job
+  extra vars.
+- Fixed: VMs can be deployed to a different node than the one holding their template. The role finds the template
+  in the cluster-wide resource list and clones it on its node with `qm clone --target <node>` (needs the template on
+  shared storage); it used to look for the template on the VM's node only and fail. The template's node must be in
+  the `proxmox` inventory group.
+- Fixed: the README's RKE2 node example no longer uses YAML merge keys, which AWX/Ascender's extra vars don't expand.
+- Added: `extra_nics` per Linux VM adds `net1`, `net2`, … (bridge, VLAN, MTU) with a static address each and no
+  gateway, from `ip` or the bridge's NetBox range, e.g. legs on storage networks. Re-runs keep the address and
+  re-reserve it in NetBox if needed; bridge/VLAN/MTU changes keep the MAC. README example: six RKE2 nodes on three
+  hosts with Ceph and NAS storage interfaces.
+- Added: `data_disks` per VM attaches extra disks, identified by their name as
+  the Proxmox disk serial, so re-runs find and grow them whatever slot they're in. On Linux VMs a disk with a `mount`
+  is formatted only when blank and mounted by UUID on first boot (`files/setup-data-disk.sh`, from cloud-init), and
+  the job waits for the mount over the guest agent, failing with the end of the cloud-init log if it doesn't appear.
+- Changed: the README's extra vars example is the minimum a deploy needs (one Linux and one Windows VM), with the
+  optional per-VM settings and their defaults in a table; `template`, `disk_target` and a per-VM `net_bridge` are
+  dropped (unused or defaulted), and the Technitium keys that have no suitable default are listed.
+- Changed: a VM's OS (Linux or Windows) comes from its template's Proxmox OS type (`ostype` starting with `w` =
+  Windows), so `os_type` is no longer needed on each VM; it's still accepted as an override. Removed from the examples.
+- Added: README sections on the inventory (the `proxmox` group, `node` after a VM migration), why the domain and
+  NetBox variables must be job extra vars (playbook `group_vars` outrank inventory variables), and troubleshooting
+  Windows deployments (first-boot diagnostics, the certificate subject, `qm guest exec` quoting).
+- Fixed: the WinRM HTTPS listener needs a certificate whose subject CN names the computer (WinRM ignores the subject
+  alternative name, and fails with "An internal error occurred" on an empty subject). Certificates without one are
+  skipped and a new one enrolled; the listener's hostname is the certificate's CN (FQDN or computer name).
+- Added: when a Windows clone never writes `SetupComplete.done`, the role inspects the guest (computer name, Windows
+  Setup `ImageState`, its `SetupComplete.cmd`, the end of the setup log) and fails saying why, e.g. that the template
+  predates vm-templates' clone answer file, instead of only timing out.
+- Fixed: a re-run that reuses the IP already on a VM (`ipconfig0`) now checks NetBox has it, and reserves it again for
+  the VM (same description, DNS name and tags) when the record is missing, so NetBox can't hand the address out.
+- Fixed: NetBox v2 API tokens (`nbt_<key>.<token>`, the default since NetBox 4.5) are sent as `Bearer`; they were
+  sent as `Token`, which NetBox rejects with "Invalid authorization header". v1 tokens still use `Token`.
+- Changed: Windows VMs no longer use cloudbase-init (the vm-templates Windows Server 2025 templates don't ship it).
+  proxmox_clone configures them over the QEMU guest agent instead: it waits for the template's unattended first
+  boot (`SetupComplete.done`), then sets the static IP, gateway, DNS servers and search list, the timezone and a new
+  local Administrator password (`windows_admin_password`) in the guest. The cloudbase-init templates and the
+  `winrm_ssl` VM option are removed.
+- Added: README instructions for the AWX credential type that injects `windows_admin_password` (the Machine
+  credential is taken by the Proxmox SSH login).
+- Added: `windows_domain_member` role, run by a second play in `site.yml` against the deployed Windows VMs over
+  PSRP: joins the domain into the OU (renaming the computer), adds `domain_admin_groups` to local Administrators,
+  enrolls an ADCS computer certificate from `windows_cert_template`, and serves WinRM over HTTPS on 5986 with it,
+  with a scheduled task that rebinds the listener when autoenrollment renews the certificate.
+- Changed: `domain_admin_group` (one group) is replaced by the `domain_admin_groups` list; the old variable is still
+  read when the new one isn't set.
+- Changed: VM names are now uppercased in Proxmox and in the NetBox `dns_name`, whatever case `name` is
+  given in. Inside the guest, Linux hostnames are lowercase and Windows hostnames are uppercase. Only new
+  clones get the new Proxmox name; an existing VM keeps its name.
+- Fixed: The NetBox IP reservation gets a `dns_name` even when the VM has no `domain`; it falls back to
+  `dns_zone`, then `technitium_dns.zone`, the same zone the Technitium A record uses.
+- Fixed: Linux VMs now use the disk space `disk_size` adds. The Rocky templates put `/` on LVM and don't
+  include `growpart`, so cloud-init never grew it and `/` stayed at the template's size. The user-data now
+  installs `files/grow-root-fs.sh` and runs it on first boot to grow the partition, LVM physical and logical
+  volume, and filesystem. VMs deployed earlier can be fixed with ans-cleanup's `playbook_grow_root_fs.yml`.
+- Added: Pull-request linting for Markdown (markdownlint), links (linkspector) and YAML via the
+  shared workflows, with `.markdownlint.json` and `.linkspector.yml`. The yamllint config is now
+  `.yamllint.yml`, the name the shared `lint-yaml` workflow expects. Markdown fixed to pass.
+- Added: CI on pushes to `main` and on pull requests (yamllint, playbook syntax check,
+  ansible-lint) via the shared `SAL9000-HomeLab/shared-actions` workflow, with `.yamllint`
+  and `.ansible-lint` configs. Tasks use FQCN module names and wrap at 120 columns.
+- Added: Linux VMs get a key-based admin login (`linux_admin_user` / `linux_admin_ssh_keys`);
+  the play fails before cloning a Linux VM that would get no SSH keys.
+- Fixed: Rendered `/etc/resolv.conf` no longer has stray indentation.
+- Changed: Example values replaced with placeholders; rendered userdata in `/tmp` is mode 0600
+  and deleted after upload; MIT license added.
+- Changed: Ansible CI runs on pull requests only, no longer on pushes to `main` (synced from ans-template).

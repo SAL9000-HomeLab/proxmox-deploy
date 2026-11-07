@@ -1,0 +1,93 @@
+---
+# roles/proxmox_clone/tasks/network_checks.yml
+# Resolve the VM's bridge and the NetBox settings, then check net0's addressing before anything is cloned: a gateway
+# outside the VM's subnet leaves the VM unreachable from every other network. The subnet is the one of ip, or of the
+# bridge's NetBox range when NetBox allocates the address.
+# Expects vm_item loop variable and facts from resolve_vars.yml.
+
+- name: Resolve VM bridge
+  ansible.builtin.set_fact:
+    net_bridge_resolved: >-
+      {{
+        vm_item.net_bridge
+        | default(
+            proxmox_cb.get('net_bridge')
+            | default(proxmox_defaults_cb.get('net_bridge'))
+          )
+      }}
+    net_model_resolved: "{{ vm_item.net_model | default('virtio') }}"
+
+- name: Resolve NetBox credential variables for this host
+  ansible.builtin.set_fact:
+    netbox_resolved_api_url: "{{ (netbox | default({})).api_url | default(netbox_api_url | default('')) }}"
+    netbox_resolved_token: "{{ (netbox | default({})).token | default(netbox_token | default('')) }}"
+  run_once: false
+
+# v2 tokens (NetBox 4.5+) look like nbt_<key>.<token> and use Bearer; v1 tokens (deprecated in 4.6) use Token.
+- name: Build the NetBox authorization header
+  ansible.builtin.set_fact:
+    netbox_resolved_authorization: >-
+      {{ ('Bearer ' if netbox_resolved_token.startswith('nbt_') else 'Token ') ~ netbox_resolved_token }}
+  no_log: true
+
+- name: Work out net0's address source and gateway
+  ansible.builtin.set_fact:
+    net0_ip_from_netbox: >-
+      {{ vm_item.ip | default('') | length == 0 and netbox_allocate_ip | default(true) | bool }}
+    net0_gateway: >-
+      {{ vm_item.gateway | default('', true)
+         or (netbox_gateway_by_bridge[net_bridge_resolved] | default('')) }}
+
+- name: Check NetBox has a range and a gateway for the VM's bridge
+  ansible.builtin.assert:
+    that:
+      - net_bridge_resolved in netbox_ip_ranges_by_bridge
+      - net0_gateway | length > 0
+    fail_msg: >-
+      {{ vm_name }} gets its address from NetBox on {{ net_bridge_resolved }}, so netbox_ip_ranges_by_bridge and
+      netbox_gateway_by_bridge need an entry for {{ net_bridge_resolved }} (or set ip and gateway on the VM). Set them
+      as job extra vars: the repository holds no values for them.
+    quiet: true
+  when: net0_ip_from_netbox | bool
+
+- name: Look up the bridge's NetBox range
+  ansible.builtin.uri:
+    url: >-
+      {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_ranges_by_bridge[net_bridge_resolved]
+      }}/
+    method: GET
+    headers:
+      Authorization: "{{ netbox_resolved_authorization }}"
+      Accept: application/json
+  register: net0_netbox_range
+  when:
+    - net0_ip_from_netbox | bool
+    - net0_gateway | length > 0
+
+# Compare the gateway's and the subnet's network parts as 32-bit numbers (no netaddr needed on the controller).
+- name: Check the gateway is in the VM's subnet
+  vars:
+    net0_subnet: >-
+      {{ vm_item.ip if vm_item.ip | default('') | length > 0
+         else (net0_netbox_range.json.start_address | default('')) }}
+    net0_prefix: "{{ (net0_subnet.split('/') + ['32'])[1] | int }}"
+    net0_subnet_octets: "{{ net0_subnet.split('/')[0].split('.') | map('int') | list }}"
+    net0_gateway_octets: "{{ net0_gateway.split('.') | map('int') | list }}"
+    net0_block: "{{ 2 ** (32 - net0_prefix | int) }}"
+  ansible.builtin.assert:
+    that:
+      - net0_gateway is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
+      - >-
+        (((net0_subnet_octets[0] * 256 + net0_subnet_octets[1]) * 256 + net0_subnet_octets[2]) * 256
+         + net0_subnet_octets[3]) // (net0_block | int)
+        == (((net0_gateway_octets[0] * 256 + net0_gateway_octets[1]) * 256 + net0_gateway_octets[2]) * 256
+            + net0_gateway_octets[3]) // (net0_block | int)
+    fail_msg: >-
+      {{ vm_name }}: gateway {{ net0_gateway }} isn't in {{ net0_subnet }}
+      ({{ 'ip' if vm_item.ip | default('') | length > 0 else 'NetBox range for ' ~ net_bridge_resolved }}), so the
+      VM would be unreachable from other networks. Fix {{ 'gateway on the VM' if vm_item.gateway | default('', true)
+      else 'netbox_gateway_by_bridge.' ~ net_bridge_resolved }}.
+    quiet: true
+  when:
+    - net0_gateway | length > 0
+    - net0_subnet is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}')

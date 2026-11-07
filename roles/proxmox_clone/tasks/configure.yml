@@ -1,0 +1,247 @@
+---
+# roles/proxmox_clone/tasks/configure.yml
+# Reconcile sockets/cores/memory, network/VLAN, tags, and disk size against the current
+# qm config (idempotent — only runs qm set/resize when something differs).
+# Expects vm_item loop variable and facts from resolve_vars.yml / clone.yml.
+
+# --- adjust CPU & memory to match desired settings (idempotent) ----------
+- name: Compute desired sockets, cores and memory (vm -> proxmox -> defaults)
+  ansible.builtin.set_fact:
+    # Empty when not set anywhere: the VM keeps the socket count it got from its template.
+    desired_sockets: >-
+      {{ vm_item.sockets
+         | default(proxmox.sockets if (proxmox is defined and 'sockets' in proxmox)
+                   else (proxmox_defaults.sockets if (proxmox_defaults is defined and 'sockets' in proxmox_defaults)
+                   else '') )
+      }}
+    desired_cores: >-
+      {{ vm_item.cores
+         | default(proxmox.cpu if (proxmox is defined and 'cpu' in proxmox)
+                   else (proxmox_defaults.cpu if (proxmox_defaults is defined and 'cpu' in proxmox_defaults)
+                   else 2) )
+      }}
+    desired_memory: >-
+      {{ vm_item.memory
+         | default(proxmox.memory if (proxmox is defined and 'memory' in proxmox)
+                   else (proxmox_defaults.memory if (proxmox_defaults is defined and 'memory' in proxmox_defaults)
+                   else 2048) )
+      }}
+  run_once: false
+
+- name: Parse current sockets, cores & memory from qm config (if present)
+  ansible.builtin.set_fact:
+    # qm config leaves out sockets when it is Proxmox's default of 1.
+    current_sockets: "{{ (qm_config.stdout | regex_search('(?m)(?<=^sockets: )\\d+')) | default('1', true) }}"
+    current_cores: "{{ (qm_config.stdout | regex_search('(?<=cores: )\\d+')) | default('') }}"
+    current_memory: "{{ (qm_config.stdout | regex_search('(?<=memory: )\\d+')) | default('') }}"
+  when: qm_config is defined
+  run_once: false
+
+- name: Build qm set argv for CPU/memory changes (include only differing flags)
+  ansible.builtin.set_fact:
+    qm_set_cfg_argv: >-
+      {{
+        [
+          'qm', 'set', (desired_vmid | string)
+        ]
+        +
+        ( ['--sockets', (desired_sockets | string)]
+          if ( (desired_sockets | string | length > 0)
+               and ((current_sockets | default('1')) | string != (desired_sockets | string)) ) else [] )
+        +
+        ( ['--cores', (desired_cores | string)]
+          if ( (current_cores | default('')) | string != (desired_cores | string) ) else [] )
+        +
+        ( ['--memory', (desired_memory | string)]
+          if ( (current_memory | default('')) | string != (desired_memory | string) ) else [] )
+      }}
+  run_once: false
+
+- name: Apply sockets/cores/memory changes via qm set (only when flags present)
+  ansible.builtin.command:
+    argv: "{{ qm_set_cfg_argv }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_cfg_result
+  # Mark changed when the command ran successfully (rc == 0).
+  # Also guard references so we don't fail if the var is undefined.
+  changed_when: >
+    (qm_set_cfg_result is defined) and
+    (qm_set_cfg_result.rc == 0)
+  # Fail only when the command returned non-zero and the stderr
+  # doesn't contain an expected benign message.
+  failed_when: >
+    (qm_set_cfg_result is defined) and
+    (qm_set_cfg_result.rc is not none) and
+    (qm_set_cfg_result.rc != 0) and
+    ('already configured' not in (qm_set_cfg_result.stderr | default('')))
+  when: qm_set_cfg_argv | length > 3   # only run if we added flags beyond qm set <vmid>
+  run_once: false
+
+# --- Ensure network and VLAN match desired settings (idempotent) ----------
+
+- name: Build net0 configuration string
+  ansible.builtin.set_fact:
+    net0_config: >-
+      {{ net_model_resolved }},
+      bridge={{ net_bridge_resolved }}
+      {% if vm_item.vlan is defined and vm_item.vlan | string | length > 0 %}
+      ,tag={{ vm_item.vlan }}
+      {% endif %}
+
+- name: Parse current net0 config from qm config
+  ansible.builtin.set_fact:
+    current_net0: "{{ (qm_config.stdout | default('')) | regex_search('(?<=net0: ).*') | default('') }}"
+    current_net0_model: >-
+      {{ (qm_config.stdout | default('')) | regex_search('(?<=net0: )[a-zA-Z0-9]+(?==)') | default('') }}
+
+- name: Configure network device (bridge + VLAN, only if different)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ desired_vmid }}"
+      - --net0
+      - "{{ net0_config | regex_replace('\\s+', '') }}"
+  delegate_to: "{{ node_name }}"
+  register: net_config_result
+  changed_when: net_config_result.rc == 0
+  when: >
+    (current_net0_model != net_model_resolved)
+    or (('bridge=' ~ net_bridge_resolved) not in current_net0)
+    or ((vm_item.vlan is defined and vm_item.vlan | string | length > 0)
+        and (('tag=' ~ (vm_item.vlan | string)) not in current_net0))
+    or ((vm_item.vlan is not defined or vm_item.vlan | string | length == 0) and ('tag=' in current_net0))
+
+# vm_item.tags may be a YAML list or a comma/semicolon-separated string.
+# Proxmox stores tags ';'-separated in qm config, so split on any of , ; or whitespace.
+- name: Parse current tags from qm config
+  ansible.builtin.set_fact:
+    current_tags: >-
+      {{ ((qm_config.stdout | default('')) | regex_search('(?<=tags: ).*') | default('', true))
+         | regex_findall('[^,;\s]+') | unique | sort }}
+    desired_tags: >-
+      {{ ((vm_item.tags | join(','))
+            if (vm_item.tags is defined and vm_item.tags is not string and vm_item.tags is iterable)
+          else (vm_item.tags | default('') | string))
+         | regex_findall('[^,;\s]+') | unique | sort }}
+
+- name: Set Proxmox VM tags (if defined and different; qm creates missing tags)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ desired_vmid }}"
+      - --tags
+      - "{{ desired_tags | join(';') }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: tags_result
+  changed_when: tags_result.rc == 0
+  when:
+    - desired_tags | length > 0
+    - current_tags != desired_tags
+
+- name: Parse current description/notes from qm config
+  ansible.builtin.set_fact:
+    current_description: "{{ (qm_config.stdout | default('')) | regex_search('(?<=description: ).*') | default('') }}"
+
+- name: Set Proxmox VM description/notes (if defined and different)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ desired_vmid }}"
+      - --description
+      - "{{ vm_item.description }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: description_result
+  changed_when: description_result.rc == 0
+  when:
+    - vm_item.description is defined
+    - current_description != vm_item.description
+
+# --- disk resize (grow-only, idempotent) -------------------------------------
+
+# Collect real disks (scsiN/virtioN/sataN/ideN, excluding cdroms) and their size=.
+- name: Parse disks and boot order from qm config
+  ansible.builtin.set_fact:
+    _qm_disk_lines: >-
+      {{ (qm_config.stdout | default('')) | regex_findall('(?m)^((?:scsi|virtio|sata|ide)\d+): (.*)$')
+         | rejectattr('1', 'search', 'media=cdrom') | list }}
+    _qm_boot_order: >-
+      {{ (((qm_config.stdout | default('')) | regex_findall('(?m)^boot: .*order=([^,\s]+)')) + ['']) | first
+         | regex_findall('[^;]+') }}
+
+- name: Map disk names to sizes
+  ansible.builtin.set_fact:
+    _qm_disks: >-
+      {{ dict(_qm_disk_lines | map(attribute='0')
+              | zip(_qm_disk_lines | map(attribute='1')
+                     | map('regex_replace', '^(?:.*size=([0-9.]+[KMGT]?).*|.*)$', '\1'))) }}
+
+# Use the requested disk_target if the VM actually has it; otherwise fall back to
+# the first disk in the boot order, then to the first disk found.
+- name: Resolve disk to resize
+  ansible.builtin.set_fact:
+    disk_target_resolved: >-
+      {{ disk_target if disk_target in _qm_disks
+         else ((_qm_boot_order | select('in', _qm_disks) | list) + (_qm_disks | list)) | first | default('') }}
+
+- name: Warn when requested disk_target is not present on the VM
+  ansible.builtin.debug:
+    msg: >-
+      disk_target '{{ disk_target }}' not found on VM {{ desired_vmid }}
+      (disks: {{ _qm_disks | list | join(', ') }}); using '{{ disk_target_resolved }}' instead.
+  when:
+    - vm_item.disk_size is defined
+    - disk_target not in _qm_disks
+    - disk_target_resolved | length > 0
+
+- name: Fail when no resizable disk was found
+  ansible.builtin.fail:
+    msg: "No disk found in qm config for VM {{ desired_vmid }}; cannot resize to {{ vm_item.disk_size }}."
+  when:
+    - vm_item.disk_size is defined
+    - disk_target_resolved | length == 0
+
+# Sizes may be K/M/G/T suffixed (or bare bytes); normalize both sides to GiB.
+- name: Split desired and current disk size into number and unit
+  ansible.builtin.set_fact:
+    _desired_size_parts: >-
+      {{ ((vm_item.disk_size | string | upper | regex_findall('([0-9.]+)\s*([KMGT]?)') | map('list') | list)
+          + [['0', '']]) | first }}
+    _current_size_parts: >-
+      {{ ((_qm_disks[disk_target_resolved] | default('0') | regex_findall('([0-9.]+)([KMGT]?)') | map('list') | list)
+          + [['0', '']]) | first }}
+    _gib_per_unit:
+      'K': 0.00000095367431640625
+      'M': 0.0009765625
+      'G': 1
+      'T': 1024
+      '': 0.000000000931322574615478515625
+  when: vm_item.disk_size is defined
+
+- name: Compute desired and current disk size in GiB
+  ansible.builtin.set_fact:
+    desired_disk_gib: "{{ (_desired_size_parts[0] | float) * _gib_per_unit[_desired_size_parts[1]] }}"
+    current_disk_gib: "{{ (_current_size_parts[0] | float) * _gib_per_unit[_current_size_parts[1]] }}"
+  when: vm_item.disk_size is defined
+
+- name: Resize disk to desired size (qm disk resize; grows only)
+  ansible.builtin.command:
+    argv:
+      - qm
+      - disk
+      - resize
+      - "{{ desired_vmid }}"
+      - "{{ disk_target_resolved }}"
+      - "{{ vm_item.disk_size }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_resize_result
+  changed_when: qm_resize_result.rc == 0
+  when:
+    - vm_item.disk_size is defined
+    - (desired_disk_gib | float) > (current_disk_gib | float)

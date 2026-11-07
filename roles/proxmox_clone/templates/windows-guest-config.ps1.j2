@@ -1,0 +1,144 @@
+# Rendered by roles/proxmox_clone/tasks/windows_guest.yml and run inside the guest as SYSTEM through the QEMU
+# guest agent (qm guest exec, script on stdin so the password never appears on a command line). Configures what
+# the vm-templates clone answer file leaves to the deploy: the static IPv4 address, DNS servers and search list,
+# the timezone and the local Administrator password, and grows C: into any new disk space. Idempotent: prints one line
+# of JSON saying what it changed.
+$ErrorActionPreference = 'Stop'
+$changes = [System.Collections.Generic.List[string]]::new()
+$notes = [System.Collections.Generic.List[string]]::new()
+
+$mac      = '{{ windows_guest_mac }}'
+$ip       = '{{ vm_ip_address }}'
+$prefix   = {{ vm_ip.split('/')[1] | int }}
+$gateway  = '{{ vm_gateway | default('', true) }}'
+$dns      = @({{ vm_item.dns_servers | default([]) | map('to_json') | join(', ') }})
+$suffixes = @({{ vm_item.search_domains | default([]) | map('to_json') | join(', ') }})
+$timezone = '{{ vm_item.timezone | default('', true) }}'
+
+$adapter = Get-NetAdapter | Where-Object { $_.MacAddress -eq $mac }
+if (-not $adapter) { throw "No network adapter with MAC $mac" }
+$ifIndex = $adapter.ifIndex
+
+# --- Static IPv4 address and default gateway ---
+$addresses = @(Get-NetIPAddress -InterfaceIndex $ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.PrefixOrigin -ne 'WellKnown' })
+$routes = @(Get-NetRoute -InterfaceIndex $ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)
+$dhcp = (Get-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4).Dhcp
+$addressOk = $dhcp -eq 'Disabled' -and $addresses.Count -eq 1 -and $addresses[0].IPAddress -eq $ip -and
+    $addresses[0].PrefixLength -eq $prefix
+$gatewayOk = if ($gateway) { $routes.Count -eq 1 -and $routes[0].NextHop -eq $gateway } else { $routes.Count -eq 0 }
+if (-not ($addressOk -and $gatewayOk)) {
+    Set-NetIPInterface -InterfaceIndex $ifIndex -AddressFamily IPv4 -Dhcp Disabled
+    $addresses | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+    $routes | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    $params = @{ InterfaceIndex = $ifIndex; AddressFamily = 'IPv4'; IPAddress = $ip; PrefixLength = $prefix }
+    if ($gateway) { $params.DefaultGateway = $gateway }
+    New-NetIPAddress @params | Out-Null
+    $changes.Add("address $ip/$prefix gateway $gateway")
+}
+
+# --- DNS servers and search list ---
+if ($dns.Count -gt 0) {
+    $current = (Get-DnsClientServerAddress -InterfaceIndex $ifIndex -AddressFamily IPv4).ServerAddresses
+    if (($current -join ',') -ne ($dns -join ',')) {
+        Set-DnsClientServerAddress -InterfaceIndex $ifIndex -ServerAddresses $dns
+        $changes.Add("dns $($dns -join ',')")
+    }
+}
+if ($suffixes.Count -gt 0) {
+    $current = (Get-DnsClientGlobalSetting).SuffixSearchList
+    if (($current -join ',') -ne ($suffixes -join ',')) {
+        Set-DnsClientGlobalSetting -SuffixSearchList $suffixes
+        $changes.Add("search list $($suffixes -join ',')")
+    }
+}
+
+# --- Timezone (a Windows time zone ID, e.g. "Eastern Standard Time") ---
+if ($timezone -and (Get-TimeZone).Id -ne $timezone) {
+    Set-TimeZone -Id $timezone
+    $changes.Add("timezone $timezone")
+}
+
+# --- Local Administrator password (built-in account, RID 500) ---
+# Set once: the template's build password is replaced on the first deploy. Later runs leave it alone, so a
+# password rotated afterwards (by hand or Windows LAPS) isn't overwritten.
+$marker = Join-Path $env:ProgramData 'proxmox-deploy\admin-password.set'
+if (-not (Test-Path $marker)) {
+    $admin = Get-LocalUser | Where-Object { $_.SID.Value -like 'S-1-5-21-*-500' }
+    $password = ConvertTo-SecureString -String '{{ windows_admin_password | replace("'", "''") }}' -AsPlainText -Force
+    $admin | Set-LocalUser -Password $password -PasswordNeverExpires $true
+    $admin | Enable-LocalUser
+    New-Item -ItemType File -Path $marker -Force | Out-Null
+    $changes.Add("administrator password")
+}
+
+# --- Grow C: into new disk space ---
+# qm disk resize only grows the virtual disk, and a recovery partition after C: blocks extending it. This follows
+# Microsoft's procedure (KB5028997): disable WinRE, which moves its image to C:, delete the partition, extend C:, create
+# the partition again at the end of the disk at the same size, and enable WinRE, which moves the image back.
+# A disk with no recovery partition after C: only has C: extended. It runs last so a failure here leaves a VM with its
+# network and password set. The size file lets a rerun finish the job if this stops partway.
+function Invoke-Checked([string]$Name, [string[]]$Arguments, [switch]$AllowFailure) {
+    # With 'Stop' in force, Windows PowerShell turns a native command's stderr into a terminating error.
+    $ErrorActionPreference = 'Continue'
+    $output = & $Name @Arguments 2>&1
+    if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) {
+        throw "$Name $($Arguments -join ' ') failed ($LASTEXITCODE): $($output -join ' ')"
+    }
+}
+
+function Invoke-Diskpart([string[]]$Commands) {
+    $file = [System.IO.Path]::GetTempFileName()
+    try {
+        Set-Content -Path $file -Value $Commands -Encoding Ascii
+        Invoke-Checked 'diskpart' @('/s', $file)
+    } finally {
+        Remove-Item -Path $file -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$recoveryGptType = '{de94bba4-06d1-4d40-a16a-bfd50179d6ac}'
+$recoverySizeFile = Join-Path $env:ProgramData 'proxmox-deploy\recovery-partition-size'
+Update-HostStorageCache
+$osPartition = Get-Partition -DriveLetter C
+$diskNumber = $osPartition.DiskNumber
+$afterOs = @(Get-Partition -DiskNumber $diskNumber | Where-Object { $_.Offset -gt $osPartition.Offset })
+$recovery = if ($afterOs.Count -eq 1 -and $afterOs[0].GptType -eq $recoveryGptType) { $afterOs[0] }
+$resuming = Test-Path $recoverySizeFile
+$hasNewSpace = (Get-Disk -Number $diskNumber).LargestFreeExtent -ge 1GB
+
+if ($afterOs.Count -gt 0 -and -not $recovery) {
+    if ($hasNewSpace) { $notes.Add('C: not extended: a partition other than the recovery partition follows it') }
+} elseif ($resuming -or $hasNewSpace) {
+    $recoverySize = if ($recovery) { [int64]$recovery.Size } elseif ($resuming) { [int64](Get-Content $recoverySizeFile) } else { [int64]0 }
+    if ($recovery) {
+        New-Item -ItemType Directory -Path (Split-Path $recoverySizeFile) -Force | Out-Null
+        Set-Content -Path $recoverySizeFile -Value $recoverySize
+        # Fails when WinRE is already disabled, so the check that matters is that the image is now on C:.
+        Invoke-Checked 'reagentc' @('/disable') -AllowFailure
+        if (-not (Test-Path "$env:SystemRoot\System32\Recovery\Winre.wim")) {
+            throw 'C: not extended: the WinRE image is not on C: after reagentc /disable, so deleting the recovery partition would lose it'
+        }
+        Invoke-Diskpart @("select disk $diskNumber", "select partition $($recovery.PartitionNumber)", 'delete partition override')
+        Update-HostStorageCache
+    }
+    $targetSize = (Get-PartitionSupportedSize -DriveLetter C).SizeMax - $recoverySize
+    $targetSize = [int64]([math]::Floor($targetSize / 1MB) * 1MB)
+    if ($targetSize -gt (Get-Partition -DriveLetter C).Size) {
+        Resize-Partition -DriveLetter C -Size $targetSize
+        $changes.Add("C: extended to $([math]::Round($targetSize / 1GB, 1)) GB")
+    }
+    if ($recoverySize -gt 0) {
+        Invoke-Diskpart @(
+            "select disk $diskNumber",
+            "create partition primary id=$($recoveryGptType.Trim('{}'))",
+            'gpt attributes=0x8000000000000001',
+            'format quick fs=ntfs label="Windows RE tools"'
+        )
+        Invoke-Checked 'reagentc' @('/enable')
+        Remove-Item -Path $recoverySizeFile -Force
+        $changes.Add('recovery partition recreated')
+    }
+}
+
+[pscustomobject]@{ changed = $changes.Count -gt 0; changes = @($changes); notes = @($notes) } | ConvertTo-Json -Compress

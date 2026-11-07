@@ -1,0 +1,60 @@
+---
+# roles/proxmox_clone/tasks/extra_nics.yml
+# Add the VM's extra network interfaces (extra_nics) as net1, net2, ... with a static address each (ipconfig1, ...),
+# e.g. legs on storage networks. They get no gateway: the default route stays on net0. cloud-init configures them
+# from Proxmox's ipconfigN like net0, so this is Linux only (Windows guests only configure net0).
+# Expects vm_item loop variable and facts from resolve_vars.yml / clone.yml / cloudinit.yml (NetBox settings).
+
+- name: Read the VM's extra network interfaces
+  ansible.builtin.set_fact:
+    extra_nics_resolved: "{{ vm_item.extra_nics | default([]) }}"
+
+- name: Check the extra network interface settings
+  ansible.builtin.assert:
+    that:
+      - cloud_type == 'linux'
+      - extra_nic.bridge | default('') | string | length > 0
+      - extra_nic.ip is not defined or extra_nic.ip == 'dhcp' or extra_nic.ip is match('^[0-9.]+/[0-9]+$')
+      - extra_nic.vlan is not defined or extra_nic.vlan | string is match('^[0-9]+$')
+      - extra_nic.mtu is not defined or extra_nic.mtu | string is match('^[0-9]+$')
+      - extra_nic_index < 31
+    fail_msg: >-
+      {{ vm_name }}: extra NIC {{ extra_nic_index + 1 }} needs a bridge; ip is a CIDR address (10.0.1.5/24) or
+      dhcp, vlan and mtu are numbers, at most 31 extra NICs, and only Linux VMs take extra NICs.
+    quiet: true
+  loop: "{{ extra_nics_resolved }}"
+  loop_control:
+    loop_var: extra_nic
+    index_var: extra_nic_index
+    label: "net{{ extra_nic_index + 1 }} {{ extra_nic.bridge | default('(no bridge)') }}"
+
+# Before changing anything: an interface without ip, and without an address from a previous run, needs a NetBox
+# range for its bridge.
+- name: Check each extra network interface without ip can get one from NetBox
+  ansible.builtin.assert:
+    that:
+      - netbox_allocate_ip | default(true) | bool
+      - extra_nic.bridge in netbox_ip_ranges_by_bridge
+      - netbox_resolved_api_url | length > 0
+      - netbox_resolved_token | length > 0
+    fail_msg: >-
+      {{ vm_name }} net{{ extra_nic_index + 1 }} ({{ extra_nic.bridge }}) has no ip: set ip on it (CIDR, or dhcp),
+      or add a NetBox range for {{ extra_nic.bridge }} to netbox_ip_ranges_by_bridge.
+    quiet: true
+  loop: "{{ extra_nics_resolved }}"
+  loop_control:
+    loop_var: extra_nic
+    index_var: extra_nic_index
+    label: "net{{ extra_nic_index + 1 }} {{ extra_nic.bridge }}"
+  when:
+    - extra_nic.ip is not defined
+    - >-
+      (qm_config.stdout | default('')) is not search('(?m)^ipconfig' ~ (extra_nic_index + 1) ~ ': (?:.*,)?ip=')
+
+- name: Add or update each extra network interface
+  ansible.builtin.include_tasks: extra_nic.yml
+  loop: "{{ extra_nics_resolved }}"
+  loop_control:
+    loop_var: extra_nic
+    index_var: extra_nic_index
+    label: "net{{ extra_nic_index + 1 }} {{ extra_nic.bridge }}"

@@ -1,0 +1,335 @@
+---
+# roles/proxmox_clone/tasks/cloudinit.yml
+# Render and upload the cloud-init snippet (Linux), allocate an IP from NetBox if
+# one wasn't supplied, and reconcile cicustom/ipconfig/DNS. Windows VMs have no
+# cloud-init: they still record ipconfig0/nameserver/searchdomain on the VM (so a
+# re-run reuses the IP), and windows_guest.yml applies them in the guest.
+# Expects vm_item loop variable and facts from resolve_vars.yml / clone.yml / configure.yml.
+
+- name: Render cloud-init userdata locally (Linux)
+  ansible.builtin.template:
+    src: linux-user-data.j2
+    dest: "/tmp/proxmox_{{ vm_name }}_{{ desired_vmid }}.userdata"
+    mode: '0600'
+  delegate_to: localhost
+  register: userdata_render
+  when: cloud_type == 'linux'
+
+- name: Resolve raw snippets dir from variables (safe)
+  ansible.builtin.set_fact:
+    _proxmox_snippets_raw: >-
+      {{ (
+          (proxmox.snippets_dir if (proxmox is defined and proxmox is mapping and 'snippets_dir' in proxmox) else
+            (proxmox_defaults.snippets_dir if (proxmox_defaults is defined and proxmox_defaults is mapping
+              and 'snippets_dir' in proxmox_defaults) else
+            '/var/lib/vz/snippets'
+            )
+          )
+        ) }}
+  run_once: false
+
+- name: Normalize snippets_dir_resolved (force leading slash, collapse doubles)
+  ansible.builtin.set_fact:
+    snippets_dir_resolved: >-
+      {{ ('/' ~ (_proxmox_snippets_raw | default('var/lib/vz/snippets'))) | regex_replace('/+','/') }}
+  run_once: false
+
+- name: Ensure snippets directory exists on node (create if missing)
+  ansible.builtin.file:
+    path: "{{ snippets_dir_resolved }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: cloud_type == 'linux'
+
+- name: Copy userdata/snippet to node snippets dir (using resolved dir)
+  ansible.builtin.copy:
+    src: "{{ userdata_render.dest }}"
+    dest: "{{ (snippets_dir_resolved | regex_replace('/$', '')) ~ '/user-data-' ~ (desired_vmid | string) }}"
+    owner: root
+    mode: '0600'
+  delegate_to: "{{ node_name }}"
+  become: true
+  when: userdata_render.dest is defined
+
+- name: Remove locally rendered userdata
+  ansible.builtin.file:
+    path: "{{ userdata_render.dest }}"
+    state: absent
+  delegate_to: localhost
+  when: userdata_render.dest is defined
+
+- name: Safety-check NetBox configuration
+  ansible.builtin.assert:
+    that:
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_allocate_ip | bool)
+
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_resolved_api_url | length > 0)
+
+      - >
+          (vm_item.ip | default('') | length > 0)
+          or
+          (netbox_resolved_token | length > 0)
+
+    fail_msg: >-
+      NetBox IP allocation is enabled, but required NetBox API settings are missing.
+
+# Re-runs against an existing VM must keep the IP it was already given rather
+# than reserving a fresh one from NetBox each time.
+- name: Reuse IP already configured on the VM (ipconfig0)
+  ansible.builtin.set_fact:
+    existing_vm_ip: >-
+      {{ ((qm_config.stdout | default('') | regex_findall('(?m)^ipconfig0: .*?\bip=([0-9.]+/[0-9]+)'))
+          + ['']) | first }}
+
+- name: Set allocated VM IP from existing VM config
+  ansible.builtin.set_fact:
+    resolved_vm_ip: "{{ existing_vm_ip }}"
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - existing_vm_ip | length > 0
+
+# A reused address must still be reserved in NetBox, or NetBox can hand it to something else. When the record is
+# gone, the block below reserves the same address again for this VM.
+- name: Check the reused IP is reserved in NetBox
+  ansible.builtin.uri:
+    url: >-
+      {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-addresses/?address={{ existing_vm_ip | urlencode }}
+    method: GET
+    headers:
+      Authorization: "{{ netbox_resolved_authorization }}"
+      Accept: application/json
+  register: netbox_existing_ip
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - netbox_allocate_ip | default(true) | bool
+    - existing_vm_ip | length > 0
+
+- name: Decide whether the reused IP needs reserving again
+  ansible.builtin.set_fact:
+    netbox_reserve_existing_ip: "{{ (netbox_existing_ip.json.count | default(1) | int) == 0 }}"
+
+- name: Warn that the VM's IP had no NetBox record
+  ansible.builtin.debug:
+    msg: >-
+      {{ vm_name }} already uses {{ existing_vm_ip }} (ipconfig0), but NetBox has no record of it; reserving it
+      again for this VM.
+  when: netbox_reserve_existing_ip | bool
+
+- name: Resolve NetBox IP range
+  ansible.builtin.set_fact:
+    netbox_ip_range_id: "{{ netbox_ip_ranges_by_bridge[net_bridge_resolved] | default('') }}"
+
+- name: Allocate IP from NetBox when ip is not defined and allocation is enabled
+  when:
+    - (vm_item.ip is not defined or vm_item.ip == "")
+    - netbox_allocate_ip | default(true) | bool
+    - existing_vm_ip | length == 0 or netbox_reserve_existing_ip | bool
+  run_once: false
+  block:
+    - name: Lookup IP range
+      ansible.builtin.uri:
+        url: >-
+          {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/
+        method: GET
+        headers:
+          Authorization: "{{ netbox_resolved_authorization }}"
+          Accept: application/json
+      register: netbox_ip_range
+
+    # NetBox only looks up nested tag references; it never creates them. Create any
+    # missing tags first so the IP reservation POST below doesn't fail validation.
+    - name: Lookup NetBox tags by name
+      ansible.builtin.uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/?name={{ item | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "{{ netbox_resolved_authorization }}"
+          Accept: application/json
+      loop: "{{ desired_tags | default([]) }}"
+      register: netbox_tag_lookup
+
+    - name: Create missing NetBox tags
+      ansible.builtin.uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/extras/tags/"
+        method: POST
+        headers:
+          Authorization: "{{ netbox_resolved_authorization }}"
+          Accept: application/json
+        body_format: json
+        body:
+          name: "{{ item.item }}"
+          slug: "{{ item.item | lower | regex_replace('[^a-z0-9_-]+', '-') }}"
+        status_code: 201
+      loop: "{{ netbox_tag_lookup.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.json.count | int == 0
+      changed_when: true
+
+    # A list built by a filter chain, not JSON text from a {% for %} loop: since ansible-core 2.19 that text stays
+    # a string and NetBox rejects it ("Expected a list of items but got type str").
+    - name: Build NetBox tag objects (name-keyed; avoids NetBox treating numeric-looking tags as related-object IDs)
+      ansible.builtin.set_fact:
+        netbox_tag_objects: "{{ desired_tags | map('string') | map('community.general.dict_kv', 'name') | list }}"
+      when: (desired_tags | default([]) | length) > 0
+
+    # dns_name uses the VM's domain, else the same zone the Technitium record goes in.
+    - name: Resolve NetBox dns_name domain
+      ansible.builtin.set_fact:
+        netbox_dns_domain: >-
+          {{ vm_item.domain | default(vm_item.dns_zone | default((technitium_dns | default({})).zone
+             | default(''), true), true) }}
+
+    - name: Build NetBox IP reservation body (description/dns_name/tags, only if provided)
+      ansible.builtin.set_fact:
+        netbox_ip_body: >-
+          {{
+            {}
+            | combine({'description': vm_item.description} if vm_item.description is defined else {})
+            | combine({'dns_name': (vm_name ~ '.' ~ netbox_dns_domain)} if netbox_dns_domain | length > 0 else {})
+            | combine({'tags': netbox_tag_objects} if (desired_tags | default([]) | length) > 0 else {})
+          }}
+
+    - name: Allocate next IP from NetBox range
+      ansible.builtin.uri:
+        url: >-
+          {{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-ranges/{{ netbox_ip_range_id }}/available-ips/
+        method: POST
+        headers:
+          Authorization: "{{ netbox_resolved_authorization }}"
+          Accept: application/json
+        body_format: json
+        body: "{{ netbox_ip_body }}"
+        status_code: 201
+      register: netbox_available_ip
+      when: not (netbox_reserve_existing_ip | bool)
+
+    - name: Assert NetBox returned an available IP
+      ansible.builtin.assert:
+        that:
+          - netbox_available_ip.json | length > 0
+      when: not (netbox_reserve_existing_ip | bool)
+
+    - name: Set allocated VM IP
+      ansible.builtin.set_fact:
+        resolved_vm_ip: "{{ netbox_available_ip.json.address }}"
+      when: not (netbox_reserve_existing_ip | bool)
+
+    - name: Reserve the VM's existing IP in NetBox again
+      ansible.builtin.uri:
+        url: "{{ netbox_resolved_api_url.rstrip('/') }}/api/ipam/ip-addresses/"
+        method: POST
+        headers:
+          Authorization: "{{ netbox_resolved_authorization }}"
+          Accept: application/json
+        body_format: json
+        body: "{{ netbox_ip_body | combine({'address': existing_vm_ip, 'status': 'active'}) }}"
+        status_code: 201
+      when: netbox_reserve_existing_ip | bool
+      changed_when: true
+
+- name: Set final VM IP and gateway variables for later configuration
+  ansible.builtin.set_fact:
+    vm_ip: >-
+      {{ vm_item.ip
+        if (vm_item.ip is defined and vm_item.ip | length > 0)
+        else (resolved_vm_ip | default('')) }}
+    vm_gateway: >-
+      {{ vm_item.gateway
+        if (vm_item.gateway is defined and vm_item.gateway | length > 0)
+        else (netbox_gateway_by_bridge[net_bridge_resolved] | default('')) }}
+    vm_ip_address: >-
+      {{ (vm_item.ip if (vm_item.ip is defined and vm_item.ip | length > 0)
+          else (resolved_vm_ip | default(''))) | regex_replace('/.*$', '') }}
+  run_once: false
+
+- name: Validate vm_ip includes a CIDR prefix (required by Proxmox ipconfig0)
+  ansible.builtin.assert:
+    that:
+      - (vm_ip | length == 0) or ('/' in vm_ip)
+    fail_msg: >-
+      vm_item.ip must include a CIDR prefix length, e.g. "10.0.30.25/24" — got "{{ vm_ip }}".
+  when: vm_ip is defined
+
+- name: Decide whether to update cicustom/ipconfig/DNS for VM
+  ansible.builtin.set_fact:
+    current_cicustom: "{{ (qm_config.stdout | regex_search('cicustom:.*')) | default('') }}"
+    current_ipconfig: "{{ (qm_config.stdout | regex_search('ipconfig\\d+:.*')) | default('') }}"
+    current_nameserver: "{{ (qm_config.stdout | regex_search('nameserver:.*')) | default('') }}"
+    current_searchdomain: "{{ (qm_config.stdout | regex_search('searchdomain:.*')) | default('') }}"
+  when: qm_config.stdout is defined
+
+- name: Build desired cicustom and ip/DNS strings (works for Linux & Windows)
+  ansible.builtin.set_fact:
+    desired_cicustom: "{{ ('user=local:snippets/user-data-' ~ desired_vmid) if cloud_type == 'linux' else '' }}"
+    desired_ipconfig: >-
+      {% if vm_ip is defined and vm_ip | length > 0 %}
+      ip={{ vm_ip }}{% if vm_gateway is defined and vm_gateway | length > 0 %},gw={{ vm_gateway }}{% endif %}
+      {% else %}
+      ""
+      {% endif %}
+    desired_nameserver: >-
+      {% if vm_item.dns_servers is defined and vm_item.dns_servers %}
+      {{ (vm_item.dns_servers | join(' ')) }}
+      {% else %}""{% endif %}
+    desired_searchdomain: >-
+      {% if vm_item.search_domains is defined and vm_item.search_domains %}
+      {{ (vm_item.search_domains | join(' ')) }}
+      {% else %}""{% endif %}
+
+- name: Build qm set argv (only include flags that have values)
+  ansible.builtin.set_fact:
+    qm_set_argv: >-
+      {{
+        ['qm', 'set', (desired_vmid | string)]
+        +
+        (['--cicustom', desired_cicustom] if desired_cicustom | length > 0 else [])
+        +
+        (
+          ['--ipconfig0',
+          'ip=' ~ vm_ip ~ (
+            (vm_gateway is defined and vm_gateway | length > 0) and (',gw=' ~ vm_gateway) or ''
+          )
+          ] if (vm_ip is defined and vm_ip | length > 0) else []
+        )
+        +
+        (
+          ['--nameserver', (vm_item.dns_servers | join(' '))]
+          if (vm_item.dns_servers is defined and (vm_item.dns_servers | length) > 0) else []
+        )
+        +
+        (
+          ['--searchdomain', (vm_item.search_domains | join(' '))]
+          if (vm_item.search_domains is defined and (vm_item.search_domains | length) > 0) else []
+        )
+      }}
+
+- name: QM set - update cicustom/ipconfig/DNS only if different
+  ansible.builtin.command:
+    argv: "{{ qm_set_argv }}"
+  delegate_to: "{{ node_name }}"
+  become: true
+  register: qm_set_result
+  changed_when: >
+    qm_set_result.rc == 0 and (
+      'updated' in (qm_set_result.stdout | default('') | lower)
+      or 'set' in (qm_set_result.stdout | default('') | lower)
+    )
+  when: >
+    (current_cicustom != desired_cicustom)
+    or (vm_ip is defined and vm_ip | length > 0 and (current_ipconfig | default('')) != desired_ipconfig)
+    or (vm_item.dns_servers is defined and vm_item.dns_servers and
+        (current_nameserver | default('')) != ('nameserver: ' ~ (vm_item.dns_servers | join(' '))))
+    or (vm_item.search_domains is defined and vm_item.search_domains and
+        (current_searchdomain | default('')) != ('searchdomain: ' ~ (vm_item.search_domains | join(' '))))
+  failed_when: qm_set_result.rc != 0 and ('already configured' not in (qm_set_result.stderr | default('')) )

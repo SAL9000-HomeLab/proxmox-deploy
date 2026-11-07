@@ -1,0 +1,48 @@
+---
+# roles/proxmox_clone/tasks/data_disks.yml
+# Attach the VM's extra disks (data_disks) and grow them. Each disk's name is set as its serial in Proxmox: re-runs
+# find the disk by it whatever slot it's in, and Linux guests find it by it to format and mount it on first boot
+# (files/setup-data-disk.sh, run from the cloud-init user-data).
+# Expects vm_item loop variable and facts from resolve_vars.yml / clone.yml.
+
+- name: Read the VM's data disks
+  ansible.builtin.set_fact:
+    data_disks_resolved: "{{ vm_item.data_disks | default([]) }}"
+    data_disks_mounted: "{{ vm_item.data_disks | default([]) | selectattr('mount', 'defined') | list }}"
+
+- name: Check the data disk settings
+  ansible.builtin.assert:
+    that:
+      - data_disk.name | default('') is match('^[a-z0-9][a-z0-9-]{0,11}$')
+      - data_disk.size | default('') | string | upper is match('^[0-9]+[GT]$')
+      - data_disk.fs | default('ext4') in ['ext4', 'xfs']
+      - data_disk.mount is not defined or data_disk.mount is match('^/.+')
+      - data_disk.mount is not defined or cloud_type == 'linux'
+    fail_msg: >-
+      {{ vm_name }}: data disk {{ data_disk.name | default('(no name)') }} needs a name of 1-12 lowercase letters,
+      digits or hyphens (it becomes the disk's serial and filesystem label) and a size in whole G or T (e.g.
+      200G); fs is ext4 or xfs; mount is an absolute path, and only Linux VMs mount data disks.
+    quiet: true
+  loop: "{{ data_disks_resolved }}"
+  loop_control:
+    loop_var: data_disk
+    label: "{{ data_disk.name | default('(no name)') }}"
+
+- name: Check the data disk names are unique
+  ansible.builtin.assert:
+    that:
+      - data_disks_resolved | map(attribute='name') | unique | length == data_disks_resolved | length
+    fail_msg: "{{ vm_name }}: two data disks have the same name; each name is a disk serial and must be unique."
+    quiet: true
+
+# New disks go in the lowest free SCSI slots after scsi0 (cdroms and cloud-init drives occupy slots too).
+- name: Note the VM's used SCSI slots
+  ansible.builtin.set_fact:
+    data_disk_used_slots: "{{ (qm_config.stdout | default('')) | regex_findall('(?m)^(scsi[0-9]+):') }}"
+
+- name: Attach or grow each data disk
+  ansible.builtin.include_tasks: data_disk.yml
+  loop: "{{ data_disks_resolved }}"
+  loop_control:
+    loop_var: data_disk
+    label: "{{ data_disk.name }}"
