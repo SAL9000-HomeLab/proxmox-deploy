@@ -5,6 +5,7 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: `windows11_pro: tpl-win11-pro` in the template catalog, for the Windows 11 Pro template vm-templates builds.
 - Removed: `local/*.real`, which held real lab names and addresses and were tracked despite the `.gitignore`. The repository
   was recreated with new history, so earlier PR numbers no longer exist and are removed from this file.
 - Added: Windows deploys grow C: into new disk space. A recovery partition after C: is deleted and created again at the
