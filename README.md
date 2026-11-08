@@ -26,6 +26,7 @@ template_catalog:
   ubuntu2404: tpl-ubuntu-2404
   windows2025_core: tpl-win2025-c
   windows2025_desktop: tpl-win2025-d
+  windows11_pro: tpl-win11-pro
 ```
 
 The deploy repo never creates templates; it only clones the ones vm-templates built.

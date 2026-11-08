@@ -43,6 +43,7 @@ template_catalog:
   ubuntu2404: tpl-ubuntu-2404
   windows2025_core: tpl-windows-server-2025-core
   windows2025_desktop: tpl-windows-server-2025-desktop
+  windows11_pro: tpl-win11-pro
 
 # provision_vms is deliberately not set here: a list in this file would be deployed by any job whose extra vars
 # don't set it (playbook group_vars outrank inventory variables). Pass it as job extra vars; see README.md.
