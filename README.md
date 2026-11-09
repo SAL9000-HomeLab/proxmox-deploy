@@ -85,7 +85,9 @@ Optional per-VM settings, with what happens when they're left out:
 | `linked_clone` | `false` (full clone) |
 | `os_type` | from the template's `ostype` |
 | `timezone` (Windows ID) | UTC |
-| `domain_join_ou`, `admin_groups`, `cert_template` | the job-wide Windows settings |
+| `domain_join` | `windows_domain_join` (`true`) or `linux_domain_join` (`false`); see [Domain join](#domain-join) |
+| `domain_join_ou`, `admin_groups` | the job-wide domain settings |
+| `cert_template` | the job-wide Windows setting |
 
 To also register the VMs in Technitium DNS, add (keys not shown default to `enabled: true` and `ttl: 3600`; the
 PTR zone is only created with `create_ptr_zone: true`):
@@ -248,6 +250,42 @@ Every `node` must be in the inventory's `proxmox` group. The template only has t
 [Templates on another node](#templates-on-another-node). Kubernetes doesn't know which VMs share a host, so the
 cluster setup labels each node with its host (`topology.kubernetes.io/zone`) to spread replicas across hosts.
 
+## Domain join
+
+Whether a VM joins Active Directory is set per OS, and per VM with `domain_join`:
+
+```yaml
+windows_domain_join: true    # default
+linux_domain_join: false     # default
+provision_vms:
+  - name: W25C-LAB01
+    template_vmid: 9001
+    domain_join: false       # a workgroup Windows VM
+  - name: r10-app-01
+    template_vmid: 9221
+    domain_join: true        # a domain-joined Linux VM
+    dns_servers: [10.0.30.101, 10.0.30.111]
+```
+
+Both OSes read the same settings: `domain_name`, `domain_join_ou` (per VM: `domain_join_ou`), `domain_admin_groups`
+(per VM: `admin_groups`) and the `domain_join_user` / `domain_join_pass` credential, which the job only requires when
+a VM joins.
+
+- **Windows:** see [Windows VMs](#windows-vms). With `domain_join: false` the VM still gets its static IP, DNS and
+  local Administrator password, but no join, admin groups, certificate or WinRM HTTPS: it stays reachable over WinRM
+  HTTP on 5985 as the local Administrator.
+- **Linux:** a third play in `site.yml` runs `ans_ldap_auth` from
+  [ans-ldap-auth](https://github.com/SAL9000-HomeLab/ans-ldap-auth) (installed by `requirements.yml`) on each joining
+  VM. It waits for SSH and for cloud-init's first boot to finish, then joins with realmd and SSSD. Members of the admin
+  groups can log in, with passwordless sudo, under their short names. Everyone else in the domain is denied, and local
+  accounts still work. See that repository for its other settings (`ans_ldap_auth_*`), which can be set as extra vars.
+  - The play connects over SSH as `linux_admin_user` with the job's Machine credential, so **that credential's public
+    key must be in `linux_admin_ssh_keys`**.
+  - The VM needs a static address (`ip`, or one from NetBox) and DNS servers that resolve the domain (`dns_servers`).
+  - AD computer names are 15 characters at most: realm truncates a longer short host name.
+
+proxmox-deprovision deletes the AD computer object of a joined VM, Windows or Linux.
+
 ## Windows VMs
 
 Windows VMs come from the vm-templates Windows Server 2025 templates, which boot through OOBE
@@ -288,7 +326,8 @@ the new VMs on 5985 and 5986. Tested with Ascender (an AWX distribution) running
 in it (`ansible_user: root`, `ansible_python_interpreter: /usr/bin/python3`), with the node's SSH key as the job's
 Machine credential. A VM's `node` must be one of those host names exactly, because every `qm` command runs on it.
 The VMs are provisioned once, by the play's first host, which delegates each VM's tasks to its node.
-The second play's group (`proxmox_deploy_windows`) is filled by the first and needs no inventory entry.
+The groups of the second and third plays (`proxmox_deploy_windows`, `proxmox_deploy_linux_domain`) are filled by the
+first and need no inventory entry.
 
 `qm list` only shows the VMs on its own node. When a VM has been migrated to another node, set its `node` to the
 node it's on now before re-running the job for it; otherwise the role looks for it on the old node, finds nothing

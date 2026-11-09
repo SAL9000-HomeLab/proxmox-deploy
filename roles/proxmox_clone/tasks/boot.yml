@@ -52,9 +52,12 @@
           delegate_to: localhost
           changed_when: false
 
-        - name: Report that WinRM is reachable (the windows_domain_member play connects next)
+        - name: Report that WinRM is reachable
           ansible.builtin.debug:
-            msg: "WinRM reachable on {{ vm_ip_address }} ({{ vm_name }})"
+            msg: >-
+              WinRM reachable on {{ vm_ip_address }} ({{ vm_name }}){{
+              '; the windows_domain_member play connects next' if vm_domain_join else
+              '; not joined to the domain (domain_join is off), so WinRM stays on HTTP 5985' }}
           when: cloud_type == 'windows'
       rescue:
         - name: Warn that service check failed
@@ -123,3 +126,31 @@
           Mount a newly attached disk yourself: /usr/local/sbin/setup-data-disk <name> <fs> <mount point> (copy
           it from proxmox-deploy's roles/proxmox_clone/files/ if the VM doesn't have it).
       when: target_exists
+
+# Linux VMs that join the domain go to the third play in site.yml, which runs ans_ldap_auth over SSH as the admin
+# user cloud-init created. The job's SSH key (the Machine credential) must be one of that user's keys.
+- name: Hand the VM to the Linux domain play
+  when:
+    - cloud_type == 'linux'
+    - vm_domain_join
+  block:
+    - name: Check the VM has an address to connect to
+      ansible.builtin.assert:
+        that:
+          - vm_ip_address | default('') | length > 0
+        fail_msg: >-
+          {{ vm_name }} joins the domain, but has no static address to connect to (DHCP). Give it an ip, let NetBox
+          allocate one, or set domain_join: false.
+        quiet: true
+
+    - name: Add the VM to the Linux domain play
+      ansible.builtin.add_host:
+        name: "{{ guest_hostname }}"
+        groups: proxmox_deploy_linux_domain
+        ansible_host: "{{ vm_ip_address }}"
+        ansible_user: "{{ linux_admin_user | default('ansible') }}"
+        # A new VM has new host keys, and a redeploy under the same name or address changes them.
+        ansible_ssh_common_args: -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+        ans_ldap_auth_computer_ou: "{{ vm_item.domain_join_ou | default(omit) }}"
+        ans_ldap_auth_admin_groups: "{{ vm_item.admin_groups | default(omit) }}"
+      changed_when: false

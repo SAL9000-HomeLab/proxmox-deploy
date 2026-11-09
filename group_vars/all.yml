@@ -1,5 +1,5 @@
 ---
-# Windows VMs: read by the windows_domain_member role (see roles/windows_domain_member/README.md).
+# Domain settings for VMs that join the domain: read by windows_domain_member (Windows) and ans_ldap_auth (Linux).
 # The credentials (windows_admin_password, domain_join_user, domain_join_pass) come from AWX credentials.
 #
 # These are placeholders. Playbook group_vars outrank AWX/Ascender inventory variables, so set the real values

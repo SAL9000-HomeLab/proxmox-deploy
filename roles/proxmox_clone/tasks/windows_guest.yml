@@ -213,6 +213,7 @@
       {{ ((windows_guest_config.stdout | from_json)['out-data'] | from_json).notes | default([]) | join(', ') }}
 
 - name: Hand the VM to the Windows domain play
+  when: vm_domain_join
   ansible.builtin.add_host:
     name: "{{ guest_hostname }}"
     groups: proxmox_deploy_windows

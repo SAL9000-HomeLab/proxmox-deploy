@@ -42,6 +42,12 @@ technitium_dns:
 linux_admin_user: ansible
 linux_admin_ssh_keys: []
 
+# Join deployed VMs to Active Directory, per OS; a VM's own domain_join (true/false) wins. Windows VMs are joined
+# by the windows_domain_member play, Linux VMs by ans_ldap_auth (realmd + SSSD) over SSH as linux_admin_user. Both
+# read domain_name, domain_join_ou, domain_admin_groups and the domain_join_user / domain_join_pass credential.
+windows_domain_join: true
+linux_domain_join: false
+
 # Default vm list (empty) - real VM definitions should be placed in group_vars or host_vars
 provision_vms: []
 

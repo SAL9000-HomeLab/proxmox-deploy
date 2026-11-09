@@ -1,8 +1,17 @@
 ---
+# ans_ldap_auth joins Linux VMs to the domain (site.yml, third play). ansible-galaxy finds the role by its
+# meta/main.yml under roles/ in that repository. The repository is public, so project syncs need no credentials.
+roles:
+  - name: ans_ldap_auth
+    src: https://github.com/SAL9000-HomeLab/ans-ldap-auth.git
+    scm: git
+    version: main
+
 collections:
   - name: effectivelywild.technitium_dns
     version: '1.1.2'
-  # proxmox_clone (dict_kv for NetBox tags)
+  # proxmox_clone (dict_kv for NetBox tags) and ans_ldap_auth (ini_file, dict_kv). No ceiling: ans_ldap_auth and the
+  # ans-ee execution environment use 13.x.
   - name: community.general
     version: ">=9.0.0"
   # windows_domain_member

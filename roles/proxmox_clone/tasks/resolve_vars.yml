@@ -124,11 +124,18 @@
          if cloud_type == 'windows'
          else (vm_item.hostname | default(vm_item.name, true)) | lower }}
 
+- name: Decide whether the VM joins the domain
+  ansible.builtin.set_fact:
+    vm_domain_join: >-
+      {{ (vm_item.domain_join if vm_item.domain_join is defined
+          else (windows_domain_join if cloud_type == 'windows' else linux_domain_join)) | bool }}
+
 - name: Show the VM's OS
   ansible.builtin.debug:
     msg: >-
       {{ vm_name }}: {{ cloud_type }} ({{ 'os_type on the VM' if vm_item.os_type is defined
-      else 'template ' ~ vm_item.template_vmid ~ ' ostype ' ~ template_ostype }})
+      else 'template ' ~ vm_item.template_vmid ~ ' ostype ' ~ template_ostype }}),
+      {{ 'joins the domain' if vm_domain_join else 'not joined to the domain' }}
 
 # --- The VM's VMID -------------------------------------------------------------------------------------------
 # Never touch a VM that isn't this one. A VMID given on the VM must be free or belong to a VM of the same name; without
@@ -233,16 +240,27 @@
       or ssh_authorized_keys on the VM. Without one, nobody can log in to it.
   when: cloud_type == 'linux'
 
-# Windows VMs get a new local Administrator password over the guest agent and are then joined to the domain by
-# the windows_domain_member play; fail before cloning when the credentials for that are missing.
-- name: Assert the Windows credentials are set
+# Windows VMs get a new local Administrator password over the guest agent; fail before cloning when it's missing.
+- name: Assert the Windows Administrator password is set
   ansible.builtin.assert:
     that:
       - windows_admin_password | default('') | length > 0
+    fail_msg: >-
+      {{ vm_name }} is a Windows VM: set windows_admin_password (its new local Administrator password), e.g. from
+      an AWX credential.
+    quiet: true
+  when: cloud_type == 'windows'
+
+# A VM that joins the domain needs the domain and the join account; fail before cloning when they're missing.
+- name: Assert the domain settings are set
+  ansible.builtin.assert:
+    that:
+      - domain_name | default('') | length > 0
       - domain_join_user | default('') | length > 0
       - domain_join_pass | default('') | length > 0
     fail_msg: >-
-      {{ vm_name }} is a Windows VM: set windows_admin_password (its new local Administrator password) and
-      domain_join_user / domain_join_pass, e.g. from AWX credentials.
+      {{ vm_name }} joins the domain: set domain_name and domain_join_user / domain_join_pass (e.g. from an AWX
+      credential), or domain_join: false on the VM ({{ cloud_type }}_domain_join: false for every {{ cloud_type }}
+      VM).
     quiet: true
-  when: cloud_type == 'windows'
+  when: vm_domain_join
