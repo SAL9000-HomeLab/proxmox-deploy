@@ -5,6 +5,11 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Added: Domain join toggle. `windows_domain_join` (default `true`) and `linux_domain_join` (default `false`) set it per
+  OS, and `domain_join` on a VM overrides both. A Windows VM with it off keeps its local Administrator login and WinRM on
+  HTTP 5985 (no join, no certificate). Linux VMs with it on are joined by a new third play that runs `ans_ldap_auth`
+  (from ans-ldap-auth, realmd + SSSD) over SSH as `linux_admin_user`, with the same `domain_*` settings and join
+  credential as Windows. `domain_join_user` / `domain_join_pass` are only required for VMs that join.
 - Added: `windows11_pro: tpl-win11-pro` in the template catalog, for the Windows 11 Pro template vm-templates builds.
 - Removed: `local/*.real`, which held real lab names and addresses and were tracked despite the `.gitignore`. The repository
   was recreated with new history, so earlier PR numbers no longer exist and are removed from this file.

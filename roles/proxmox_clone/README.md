@@ -105,8 +105,12 @@ Variable reference:
   - `timezone`: Windows only — a Windows time zone ID (e.g. `Eastern Standard Time`) set in the guest.
     Unset leaves the template's UTC. Linux VMs are currently hardcoded to `UTC` in
     `templates/linux-user-data.j2`, regardless of this field.
-  - `domain_join_ou`, `admin_groups` (list), `cert_template`: Windows only — per-VM overrides of the
-    [windows_domain_member](../windows_domain_member/README.md) OU, local admin groups and ADCS template.
+  - `domain_join`: `true` or `false` to join this VM to the domain or not. Defaults to `windows_domain_join`
+    (`true`) or `linux_domain_join` (`false`). Windows VMs are joined by
+    [windows_domain_member](../windows_domain_member/README.md), Linux VMs by `ans_ldap_auth` (third play in
+    `site.yml`).
+  - `domain_join_ou`, `admin_groups` (list): per-VM overrides of the OU and the admin groups, for Windows and Linux.
+    `cert_template`: Windows only, overrides the ADCS template.
   - `dns`: Linux only — a single nameserver string, used as a fallback in
     `templates/linux-user-data.j2` when `dns_servers` isn't set. Doesn't affect the Proxmox
     `--nameserver` config (which only reads `dns_servers`).
@@ -134,11 +138,13 @@ Variable reference:
   - `netbox`: API connection settings with `api_url`, `token`, and optional `ssl_verify`
     (defaults to `true`). `netbox_api_url` / `netbox_token` are accepted as flat fallbacks if
     `netbox.api_url` / `netbox.token` aren't set.
-- Windows credentials (not part of `provision_vms` items; supply them from AWX credentials, the play
-  fails before cloning a Windows VM without them):
-  - `windows_admin_password`: the new local Administrator password, set once on the first deploy (it
+- `windows_domain_join` (default `true`) and `linux_domain_join` (default `false`): whether VMs of that OS join the
+  domain when they don't set `domain_join`.
+- Credentials (not part of `provision_vms` items; supply them from AWX credentials, the play fails before cloning a VM
+  that needs them):
+  - `windows_admin_password`: the new local Administrator password of Windows VMs, set once on the first deploy (it
     replaces the template's build password; later runs leave it alone). The domain play connects with it.
-  - `domain_join_user` / `domain_join_pass`: the account that joins the VM to the domain.
+  - `domain_join_user` / `domain_join_pass`: the account that joins VMs to the domain (only for VMs that join).
   - The domain settings themselves (`domain_name`, `domain_join_ou`, `domain_admin_groups`,
     `windows_cert_template`) are read by [windows_domain_member](../windows_domain_member/README.md).
 

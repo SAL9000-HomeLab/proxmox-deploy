@@ -13,3 +13,29 @@
   gather_facts: false
   roles:
     - role: windows_domain_member
+
+# proxmox_clone adds every Linux VM it deployed with domain_join on to proxmox_deploy_linux_domain, with an SSH
+# connection as linux_admin_user. ans_ldap_auth (from ans-ldap-auth, see requirements.yml) joins it with realmd and
+# SSSD; it reads the same domain_* variables and join credential as the Windows play.
+- name: Join the deployed Linux VMs to the domain
+  hosts: proxmox_deploy_linux_domain
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    # cloud-init's first boot updates packages, which holds the package manager lock ans_ldap_auth needs.
+    # Exit code 2 means it finished with recoverable errors.
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        argv: [cloud-init, status, --wait]
+      register: proxmox_deploy_cloud_init
+      changed_when: false
+      failed_when: proxmox_deploy_cloud_init.rc not in [0, 2]
+
+    # include_role rather than roles:, so a syntax check works without the role installed.
+    - name: Join the domain with realmd and SSSD
+      ansible.builtin.include_role:
+        name: ans_ldap_auth
