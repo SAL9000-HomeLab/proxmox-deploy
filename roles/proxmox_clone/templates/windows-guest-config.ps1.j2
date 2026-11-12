@@ -13,7 +13,7 @@ $prefix   = {{ vm_ip.split('/')[1] | int }}
 $gateway  = '{{ vm_gateway | default('', true) }}'
 $dns      = @({{ vm_item.dns_servers | default([]) | map('to_json') | join(', ') }})
 $suffixes = @({{ vm_item.search_domains | default([]) | map('to_json') | join(', ') }})
-$timezone = '{{ vm_item.timezone | default('', true) }}'
+$timezone = '{{ vm_timezone | default('') | replace("'", "''") }}'
 
 $adapter = Get-NetAdapter | Where-Object { $_.MacAddress -eq $mac }
 if (-not $adapter) { throw "No network adapter with MAC $mac" }
@@ -53,10 +53,18 @@ if ($suffixes.Count -gt 0) {
     }
 }
 
-# --- Timezone (a Windows time zone ID, e.g. "Eastern Standard Time") ---
-if ($timezone -and (Get-TimeZone).Id -ne $timezone) {
-    Set-TimeZone -Id $timezone
-    $changes.Add("timezone $timezone")
+# --- Timezone ---
+# A Windows time zone ID (e.g. "Eastern Standard Time", see Get-TimeZone -ListAvailable); resolve_vars.yml has already
+# turned aliases such as EST into one. An ID Windows doesn't know is reported in the notes and skipped, so it doesn't
+# stop the rest.
+if ($timezone) {
+    $known = @(Get-TimeZone -ListAvailable | Where-Object { $_.Id -eq $timezone })
+    if ($known.Count -eq 0) {
+        $notes.Add("timezone not set: '$timezone' is not a Windows time zone ID (e.g. 'Eastern Standard Time')")
+    } elseif ((Get-TimeZone).Id -ne $known[0].Id) {
+        Set-TimeZone -Id $known[0].Id
+        $changes.Add("timezone $($known[0].Id)")
+    }
 }
 
 # --- Local Administrator password (built-in account, RID 500) ---

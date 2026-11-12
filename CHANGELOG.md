@@ -5,6 +5,13 @@ pushing a `vX.Y.Z` tag; the release workflow publishes the matching section.
 
 ## [Unreleased]
 
+- Fixed: A Windows VM's `timezone` set to a common name such as `EST` failed the deploy ("The time zone ID 'EST' was not
+  found"), which also skipped the Administrator password, the disk resize and the domain join. A name Windows doesn't
+  know is now reported in the guest configuration notes instead of failing the deploy.
+- Added: `timezone` for Linux VMs (cloud-init, first boot; it was always UTC), and aliases for both OSes in
+  `proxmox_clone_timezone_aliases`: `EST` gives `America/New_York` on Linux and `Eastern Standard Time` on Windows,
+  and likewise for the other US zones, `UTC`/`GMT` and the IANA and Windows names they stand for. A Linux time zone
+  the node's zoneinfo doesn't have falls back to UTC with a warning.
 - Added: Domain join toggle. `windows_domain_join` (default `true`) and `linux_domain_join` (default `false`) set it per
   OS, and `domain_join` on a VM overrides both. A Windows VM with it off keeps its local Administrator login and WinRM on
   HTTP 5985 (no join, no certificate). Linux VMs with it on are joined by a new third play that runs `ans_ldap_auth`

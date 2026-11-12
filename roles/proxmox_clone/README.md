@@ -102,7 +102,14 @@ Variable reference:
     the uppercased `name` as `<NAME>.<domain>` and set as the `dns_name` on that NetBox IP address reservation.
     Falls back to `dns_zone`, then `technitium_dns.zone`; with none of them set, no `dns_name` is sent.
     (Unrelated to the Windows domain-join variables below, despite the similar name.)
-  - `timezone`: Windows only — a Windows time zone ID (e.g. `Eastern Standard Time`) set in the guest.
+  - `timezone`: the guest's time zone: an IANA name (e.g. `America/New_York`) for Linux, a Windows time zone ID (e.g.
+    `Eastern Standard Time`) for Windows, or an alias from `vars/main.yml` for either: the common US abbreviations
+    (`EST`, `CST`, `MST`, `PST`, `AKST`, `HST`; they mean the zones with daylight saving time), `UTC`/`GMT`, and the
+    IANA and Windows names they stand for, so `EST` gives `America/New_York` on Linux and `Eastern Standard Time` on
+    Windows. Linux defaults to UTC and gets it from cloud-init on its first boot only (a rerun doesn't change an
+    existing VM's); a name missing from the node's `/usr/share/zoneinfo` gets UTC with a warning. Windows keeps the
+    template's time zone when it's unset, and is set on every run; a name Windows doesn't know is reported in the guest
+    configuration notes and skipped. Neither fails the deploy.
     Unset leaves the template's UTC. Linux VMs are currently hardcoded to `UTC` in
     `templates/linux-user-data.j2`, regardless of this field.
   - `domain_join`: `true` or `false` to join this VM to the domain or not. Defaults to `windows_domain_join`
