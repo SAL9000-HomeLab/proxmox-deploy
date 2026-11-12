@@ -1,0 +1,46 @@
+---
+# roles/proxmox_clone/vars/main.yml
+
+# Time zone names a VM's timezone may use besides the OS's own IDs, each with the Windows time zone ID and the IANA
+# name (Linux) it stands for. Keys are lowercase; resolve_vars.yml looks them up case-insensitively. A Windows ID
+# listed here also works for a Linux VM, and an IANA name listed here for a Windows VM. The US abbreviations mean
+# the zones with daylight saving time, as people usually do (IANA's own EST and MST are fixed UTC-5 and UTC-7).
+proxmox_clone_timezone_aliases:
+  utc: {windows: UTC, linux: UTC}
+  gmt: {windows: UTC, linux: UTC}
+  z: {windows: UTC, linux: UTC}
+  etc/utc: {windows: UTC, linux: UTC}
+  etc/gmt: {windows: UTC, linux: UTC}
+  est: {windows: Eastern Standard Time, linux: America/New_York}
+  edt: {windows: Eastern Standard Time, linux: America/New_York}
+  et: {windows: Eastern Standard Time, linux: America/New_York}
+  est5edt: {windows: Eastern Standard Time, linux: America/New_York}
+  us/eastern: {windows: Eastern Standard Time, linux: America/New_York}
+  america/new_york: {windows: Eastern Standard Time, linux: America/New_York}
+  america/detroit: {windows: Eastern Standard Time, linux: America/Detroit}
+  cst: {windows: Central Standard Time, linux: America/Chicago}
+  cdt: {windows: Central Standard Time, linux: America/Chicago}
+  ct: {windows: Central Standard Time, linux: America/Chicago}
+  cst6cdt: {windows: Central Standard Time, linux: America/Chicago}
+  us/central: {windows: Central Standard Time, linux: America/Chicago}
+  america/chicago: {windows: Central Standard Time, linux: America/Chicago}
+  mst: {windows: Mountain Standard Time, linux: America/Denver}
+  mdt: {windows: Mountain Standard Time, linux: America/Denver}
+  mt: {windows: Mountain Standard Time, linux: America/Denver}
+  mst7mdt: {windows: Mountain Standard Time, linux: America/Denver}
+  us/mountain: {windows: Mountain Standard Time, linux: America/Denver}
+  america/denver: {windows: Mountain Standard Time, linux: America/Denver}
+  america/phoenix: {windows: US Mountain Standard Time, linux: America/Phoenix}
+  pst: {windows: Pacific Standard Time, linux: America/Los_Angeles}
+  pdt: {windows: Pacific Standard Time, linux: America/Los_Angeles}
+  pt: {windows: Pacific Standard Time, linux: America/Los_Angeles}
+  pst8pdt: {windows: Pacific Standard Time, linux: America/Los_Angeles}
+  us/pacific: {windows: Pacific Standard Time, linux: America/Los_Angeles}
+  america/los_angeles: {windows: Pacific Standard Time, linux: America/Los_Angeles}
+  akst: {windows: Alaskan Standard Time, linux: America/Anchorage}
+  america/anchorage: {windows: Alaskan Standard Time, linux: America/Anchorage}
+  hst: {windows: Hawaiian Standard Time, linux: Pacific/Honolulu}
+  pacific/honolulu: {windows: Hawaiian Standard Time, linux: Pacific/Honolulu}
+  europe/london: {windows: GMT Standard Time, linux: Europe/London}
+  europe/berlin: {windows: W. Europe Standard Time, linux: Europe/Berlin}
+  europe/paris: {windows: Romance Standard Time, linux: Europe/Paris}

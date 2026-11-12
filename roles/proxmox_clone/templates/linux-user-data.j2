@@ -3,7 +3,7 @@ hostname: {{ guest_hostname }}
 fqdn: {{ guest_hostname }}
 manage_etc_hosts: true
 
-timezone: UTC
+timezone: {{ vm_timezone | default('UTC', true) | to_json }}
 
 ssh_pwauth: false
 

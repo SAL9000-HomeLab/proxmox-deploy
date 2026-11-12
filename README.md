@@ -84,7 +84,7 @@ Optional per-VM settings, with what happens when they're left out:
 | `tags`, `description` | none (applied in Proxmox, and in NetBox when it allocates the IP) |
 | `linked_clone` | `false` (full clone) |
 | `os_type` | from the template's `ostype` |
-| `timezone` (Windows ID) | UTC |
+| `timezone` (`EST`, `America/New_York`, `Eastern Standard Time`, ...; see the role README) | UTC (Windows: the template's) |
 | `domain_join` | `windows_domain_join` (`true`) or `linux_domain_join` (`false`); see [Domain join](#domain-join) |
 | `domain_join_ou`, `admin_groups` | the job-wide domain settings |
 | `cert_template` | the job-wide Windows setting |

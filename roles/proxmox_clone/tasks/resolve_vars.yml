@@ -130,12 +130,51 @@
       {{ (vm_item.domain_join if vm_item.domain_join is defined
           else (windows_domain_join if cloud_type == 'windows' else linux_domain_join)) | bool }}
 
+# vm_timezone: the name the guest gets ('' leaves a Windows VM's alone; Linux defaults to UTC). An alias in
+# proxmox_clone_timezone_aliases, or a Windows ID listed there for a Linux VM, becomes this OS's name; anything else
+# passes through. windows-guest-config.ps1 checks a Windows name in the guest; Linux names are checked below.
+- name: Resolve the VM's time zone
+  ansible.builtin.set_fact:
+    vm_timezone: >-
+      {%- set requested = vm_item.timezone | default('', true) | string | trim -%}
+      {%- set by_windows_id = proxmox_clone_timezone_aliases | dict2items
+            | selectattr('value.windows', 'equalto', requested) | map(attribute='value') | list -%}
+      {%- set alias = proxmox_clone_timezone_aliases.get(requested | lower)
+            or (by_windows_id | first if by_windows_id and cloud_type == 'linux' else {}) -%}
+      {{ alias[cloud_type] if alias else (requested or ('UTC' if cloud_type == 'linux' else '')) }}
+
+# cloud-init only logs a time zone it can't find, so look for it in the node's zoneinfo (the same tzdata the
+# templates ship) and fall back to UTC with a warning.
+- name: Check the Linux time zone exists
+  when: cloud_type == 'linux' and vm_timezone != 'UTC'
+  block:
+    - name: Look up the time zone in the node's zoneinfo
+      ansible.builtin.stat:
+        path: "/usr/share/zoneinfo/{{ vm_timezone }}"
+        get_checksum: false
+      delegate_to: "{{ node_name }}"
+      register: vm_timezone_zoneinfo
+      when: vm_timezone is match('^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$')
+
+    - name: Warn that the time zone is unknown and fall back to UTC
+      ansible.builtin.debug:
+        msg: >-
+          {{ vm_name }}: timezone '{{ vm_item.timezone }}' is not an IANA time zone (e.g. America/New_York) or a
+          known alias, so the VM gets UTC.
+      when: not vm_timezone_zoneinfo.stat.isreg | default(false)
+
+    - name: Use UTC instead of the unknown time zone
+      ansible.builtin.set_fact:
+        vm_timezone: UTC
+      when: not vm_timezone_zoneinfo.stat.isreg | default(false)
+
 - name: Show the VM's OS
   ansible.builtin.debug:
     msg: >-
       {{ vm_name }}: {{ cloud_type }} ({{ 'os_type on the VM' if vm_item.os_type is defined
       else 'template ' ~ vm_item.template_vmid ~ ' ostype ' ~ template_ostype }}),
-      {{ 'joins the domain' if vm_domain_join else 'not joined to the domain' }}
+      {{ 'joins the domain' if vm_domain_join else 'not joined to the domain' }},
+      time zone {{ vm_timezone or "left as the template's" }}
 
 # --- The VM's VMID -------------------------------------------------------------------------------------------
 # Never touch a VM that isn't this one. A VMID given on the VM must be free or belong to a VM of the same name; without
